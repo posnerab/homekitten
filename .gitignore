@@ -1,0 +1,9 @@
+.build/
+.idea/
+.vscode/
+.DS_Store
+DerivedData/
+*.xcuserstate
+*.xccheckout
+*.xcscmblueprint
+**/xcuserdata/
