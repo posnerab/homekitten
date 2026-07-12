@@ -5,8 +5,10 @@ import HomeKit
 
 private enum HomeSection: String, CaseIterable, Identifiable {
     case home = "Home"
-    case scenes = "Scenes"
+    case accessories = "Accessories"
     case groups = "Groups"
+    case bridges = "Bridges"
+    case scenes = "Scenes"
     case automations = "Automations"
     var id: Self { self }
 }
@@ -64,7 +66,7 @@ struct ContentView: View {
             if let home = selectedHome {
                 List(selection: $selectedRoomID) {
                     Section("Rooms") {
-                        ForEach(home.rooms, id: \.uniqueIdentifier) { room in
+                        ForEach(sidebarRooms(for: home), id: \.uniqueIdentifier) { room in
                             Button {
                                 selectedRoomID = room.uniqueIdentifier
                             } label: {
@@ -96,13 +98,15 @@ struct ContentView: View {
 
     @ViewBuilder private var detail: some View {
         if let home = selectedHome {
-            if let room = home.rooms.first(where: { $0.uniqueIdentifier == selectedRoomID }) {
+            if let room = sidebarRooms(for: home).first(where: { $0.uniqueIdentifier == selectedRoomID }) {
                 RoomWorkspaceView(home: home, room: room)
             } else {
                 switch section {
                 case .home: HomeWorkspaceView(home: home)
-                case .scenes: ScenesListView(home: home)
+                case .accessories: AccessoriesWorkspaceView(home: home)
                 case .groups: GroupsListView(home: home)
+                case .bridges: BridgesWorkspaceView(home: home)
+                case .scenes: ScenesListView(home: home)
                 case .automations: AutomationsListView(home: home)
                 }
             }
@@ -174,6 +178,14 @@ struct ContentView: View {
         if let selectedHomeID, store.homes.contains(where: { $0.uniqueIdentifier == selectedHomeID }) { return }
         selectedHomeID = store.homes.first(where: \.isPrimary)?.uniqueIdentifier ?? store.homes.first?.uniqueIdentifier
     }
+
+    private func sidebarRooms(for home: HMHome) -> [HMRoom] {
+        var rooms = home.rooms
+        if !rooms.contains(where: { $0.uniqueIdentifier == home.roomForEntireHome().uniqueIdentifier }) {
+            rooms.append(home.roomForEntireHome())
+        }
+        return rooms.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
 }
 
 private enum WizNameSync {
@@ -189,8 +201,16 @@ private enum WizNameSync {
             let serial = try await read(serialCharacteristic)
             let mac = serial.components(separatedBy: CharacterSet.alphanumerics.inverted).joined().lowercased()
             guard mac.count == 12 else { continue }
-            let existing = names[mac]
-            if existing == nil || isGeneric(existing!) { names[mac] = accessory.name }
+            let accessoryName = accessory.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            let candidate = isGeneric(accessoryName)
+                ? groupedName(for: accessory, in: home, serial: mac) ?? accessoryName
+                : accessoryName
+            guard !candidate.isEmpty else { continue }
+            if let existing = names[mac] {
+                if isGeneric(existing) && !isGeneric(candidate) { names[mac] = candidate }
+            } else {
+                names[mac] = candidate
+            }
         }
         guard !names.isEmpty else { throw SyncError.noDevices }
         let devices = names.sorted(by: { $0.key < $1.key }).map { ["mac": $0.key, "name": $0.value] }
@@ -218,7 +238,23 @@ private enum WizNameSync {
     }
 
     private static func isGeneric(_ name: String) -> Bool {
-        name.localizedCaseInsensitiveContains("Wiz RGB Bulb") || name.localizedCaseInsensitiveContains("Wiz Light Pole")
+        if name.localizedCaseInsensitiveContains("Wiz RGB Bulb") || name.localizedCaseInsensitiveContains("Wiz Light Pole") { return true }
+        let parts = name.split(separator: " ")
+        return parts.count == 2
+            && parts[0].localizedCaseInsensitiveCompare("WiZ") == .orderedSame
+            && parts[1].count == 6
+            && parts[1].allSatisfy(\.isHexDigit)
+    }
+
+    private static func groupedName(for accessory: HMAccessory, in home: HMHome, serial: String) -> String? {
+        let serviceIDs = Set(accessory.services.map(\.uniqueIdentifier))
+        guard let group = home.serviceGroups
+            .filter({ group in group.services.contains { serviceIDs.contains($0.uniqueIdentifier) } })
+            .sorted(by: { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending })
+            .first else { return nil }
+        let groupName = group.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !groupName.isEmpty else { return nil }
+        return "\(groupName) \(serial.prefix(6))"
     }
 
     private enum SyncError: LocalizedError {
@@ -265,6 +301,68 @@ struct NewSceneView: View {
     }
 }
 
+private struct AccessoriesWorkspaceView: View {
+    let home: HMHome
+    @State private var query = ""
+
+    var body: some View {
+        List(accessories, id: \.uniqueIdentifier) { accessory in
+            NavigationLink {
+                AccessoryDetailView(home: home, accessory: accessory)
+            } label: {
+                HomeAccessoryControl(home: home, accessory: accessory, showsRoom: true)
+            }
+        }
+        .navigationTitle("Accessories")
+        .searchable(text: $query, prompt: "Search accessories")
+    }
+
+    private var accessories: [HMAccessory] {
+        home.accessories
+            .filter { query.isEmpty || $0.name.localizedCaseInsensitiveContains(query) }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+}
+
+private struct BridgesWorkspaceView: View {
+    let home: HMHome
+    @State private var query = ""
+
+    var body: some View {
+        List {
+            ForEach(bridges, id: \.bridge.uniqueIdentifier) { bridge in
+                Section(bridge.bridge.name) {
+                    ForEach(bridge.accessories, id: \.uniqueIdentifier) { accessory in
+                        NavigationLink {
+                            AccessoryDetailView(home: home, accessory: accessory)
+                        } label: {
+                            HomeAccessoryControl(home: home, accessory: accessory, showsRoom: true)
+                        }
+                    }
+                }
+            }
+        }
+        .overlay {
+            if bridges.isEmpty { ContentUnavailableView("No Bridges", systemImage: "network") }
+        }
+        .navigationTitle("Bridges")
+        .searchable(text: $query, prompt: "Search bridges and accessories")
+    }
+
+    private var bridges: [(bridge: HMAccessory, accessories: [HMAccessory])] {
+        home.accessories.compactMap { bridge in
+            guard let identifiers = bridge.identifiersForBridgedAccessories, !identifiers.isEmpty else { return nil }
+            let identifierSet = Set(identifiers)
+            let accessories = home.accessories
+                .filter { identifierSet.contains($0.uniqueIdentifier) }
+                .filter { query.isEmpty || bridge.name.localizedCaseInsensitiveContains(query) || $0.name.localizedCaseInsensitiveContains(query) }
+                .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+            return accessories.isEmpty && !query.isEmpty ? nil : (bridge, accessories)
+        }
+        .sorted { $0.bridge.name.localizedCaseInsensitiveCompare($1.bridge.name) == .orderedAscending }
+    }
+}
+
 private struct HomeWorkspaceView: View {
     let home: HMHome
     @State private var query = ""
@@ -279,7 +377,7 @@ private struct HomeWorkspaceView: View {
                             NavigationLink {
                                 AccessoryDetailView(home: home, accessory: accessory)
                             } label: {
-                                HomeAccessoryControl(accessory: accessory)
+                                HomeAccessoryControl(home: home, accessory: accessory)
                             }
                         case .group(let group):
                             NavigationLink {
@@ -328,13 +426,19 @@ private enum HomeItem: Identifiable {
 }
 
 private struct HomeAccessoryControl: View {
+    let home: HMHome
     let accessory: HMAccessory
+    var showsRoom = false
 
     var body: some View {
         HStack(spacing: 12) {
             HomePowerButton(characteristics: powerCharacteristics, icon: accessoryIcon(accessory))
             VStack(alignment: .leading) {
-                Text(accessory.name)
+                Text(accessoryDisplayName(accessory, in: home))
+                if showsRoom {
+                    Text(accessory.room?.name ?? "Default Room")
+                        .lineLimit(1).font(.caption).foregroundStyle(.secondary)
+                }
                 Text(accessory.services.map(\.localizedDescription).joined(separator: " · "))
                     .lineLimit(1).font(.caption).foregroundStyle(.secondary)
             }
@@ -352,6 +456,38 @@ private struct HomeAccessoryControl: View {
     private var hueCharacteristic: HMCharacteristic? {
         accessory.services.flatMap(\.characteristics).first { $0.characteristicType == HMCharacteristicTypeHue }
     }
+}
+
+private func accessoryDisplayName(_ accessory: HMAccessory, in home: HMHome) -> String {
+    let original = accessory.name.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard isGenericWizName(original), let serial = wizSerial(for: accessory, fallbackName: original) else { return original }
+    let serviceIDs = Set(accessory.services.map(\.uniqueIdentifier))
+    guard let group = home.serviceGroups
+        .filter({ $0.services.contains { serviceIDs.contains($0.uniqueIdentifier) } })
+        .sorted(by: { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending })
+        .first else { return original }
+    let groupName = group.name.trimmingCharacters(in: .whitespacesAndNewlines)
+    return groupName.isEmpty ? original : "\(groupName) \(serial.prefix(6))"
+}
+
+private func wizSerial(for accessory: HMAccessory, fallbackName: String) -> String? {
+    if let value = accessory.services.flatMap(\.characteristics)
+        .first(where: { $0.characteristicType == HMCharacteristicTypeSerialNumber })?.value as? String {
+        let serial = value.filter(\.isHexDigit).lowercased()
+        if serial.count >= 6 { return serial }
+    }
+    let suffix = fallbackName.split(separator: " ").last.map(String.init) ?? ""
+    let serial = suffix.filter(\.isHexDigit).lowercased()
+    return serial.count >= 6 ? serial : nil
+}
+
+private func isGenericWizName(_ name: String) -> Bool {
+    if name.localizedCaseInsensitiveContains("Wiz RGB Bulb") || name.localizedCaseInsensitiveContains("Wiz Light Pole") { return true }
+    let parts = name.split(separator: " ")
+    return parts.count == 2
+        && parts[0].localizedCaseInsensitiveCompare("WiZ") == .orderedSame
+        && parts[1].count == 6
+        && parts[1].allSatisfy(\.isHexDigit)
 }
 
 private struct HomeGroupControl: View {
