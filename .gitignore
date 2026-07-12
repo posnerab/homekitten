@@ -3,6 +3,7 @@
 .vscode/
 .DS_Store
 DerivedData/
+.codex-derived/
 *.xcuserstate
 *.xccheckout
 *.xcscmblueprint
