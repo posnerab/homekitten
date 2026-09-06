@@ -20,6 +20,8 @@
 	<string>1</string>
 	<key>NSHomeKitUsageDescription</key>
 	<string>HomeKitten needs access to display and control your HomeKit homes and accessories.</string>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>HomeKitten needs permission to list and run your shortcuts in the Shortcuts app.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>HomeKitten connects to the local Homebridge server to persist accessory names.</string>
 	<key>NSAppTransportSecurity</key>

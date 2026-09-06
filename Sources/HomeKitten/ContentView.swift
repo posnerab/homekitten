@@ -10,6 +10,8 @@ private enum HomeSection: String, CaseIterable, Identifiable {
     case bridges = "Bridges"
     case scenes = "Scenes"
     case automations = "Automations"
+    case shortcuts = "Shortcuts"
+    case backups = "Backups"
     var id: Self { self }
 }
 
@@ -20,6 +22,7 @@ struct ContentView: View {
     @State private var section: HomeSection = .home
     @State private var showingNewScene = false
     @State private var showingNewAutomation = false
+    @State private var showingNewGroup = false
     @State private var syncMessage = ""
     @State private var showingSyncResult = false
     @State private var attemptedAutomaticSync = false
@@ -57,6 +60,9 @@ struct ContentView: View {
         }
         .sheet(isPresented: $showingNewAutomation) {
             if let home = selectedHome { NavigationStack { NewAutomationView(home: home) } }
+        }
+        .sheet(isPresented: $showingNewGroup) {
+            if let home = selectedHome { NavigationStack { NewGroupView(home: home) } }
         }
         .alert("WiZ Name Sync", isPresented: $showingSyncResult) { Button("OK") {} } message: { Text(syncMessage) }
     }
@@ -108,6 +114,8 @@ struct ContentView: View {
                 case .bridges: BridgesWorkspaceView(home: home)
                 case .scenes: ScenesListView(home: home)
                 case .automations: AutomationsListView(home: home)
+                case .shortcuts: ShortcutsWorkspaceView()
+                case .backups: BackupsWorkspaceView(home: home)
                 }
             }
         } else {
@@ -141,6 +149,7 @@ struct ContentView: View {
             Menu {
                 Button("New Scene", systemImage: "sparkles") { showingNewScene = true }
                 Button("New Automation", systemImage: "clock.arrow.trianglehead.counterclockwise.rotate.90") { showingNewAutomation = true }
+                Button("New Group", systemImage: "square.stack.3d.up") { showingNewGroup = true }
                 Divider()
                 Button("Sync WiZ Names to Homebridge", systemImage: "arrow.triangle.2.circlepath") {
                     guard let home = selectedHome else { return }

@@ -97,7 +97,6 @@ struct RoomDetailView: View {
 struct GroupsListView: View {
     let home: HMHome
     @State private var query = ""
-    @State private var showingNewGroup = false
 
     var body: some View {
         List(home.serviceGroups.filter { query.isEmpty || $0.name.localizedCaseInsensitiveContains(query) }, id: \.uniqueIdentifier) { group in
@@ -110,8 +109,6 @@ struct GroupsListView: View {
         .navigationTitle("Groups")
         .searchable(text: $query, prompt: "Search groups")
         .homeKittenBackButton()
-        .toolbar { ToolbarItem(placement: .primaryAction) { Button("New Group", systemImage: "plus") { showingNewGroup = true } } }
-        .sheet(isPresented: $showingNewGroup) { NavigationStack { NewGroupView(home: home) } }
     }
 }
 
@@ -159,11 +156,21 @@ struct AddGroupServicesView: View {
     let group: HMServiceGroup
     @Environment(\.dismiss) private var dismiss
     @State private var status = ""
+    @State private var query = ""
 
     var body: some View {
         List {
-            ForEach(home.accessories, id: \.uniqueIdentifier) { accessory in
-                Section(accessory.name) {
+            Section("Filter") {
+                TextField("Accessory or bridge name", text: $query)
+                    .textInputAutocapitalization(.never)
+            }
+            Section("Copy Services From Group") {
+                ForEach(home.serviceGroups.filter { $0.uniqueIdentifier != group.uniqueIdentifier }, id: \.uniqueIdentifier) { source in
+                    Button("Add \(source.name) Constituents") { addServices(source.services) }
+                }
+            }
+            ForEach(home.accessories.filter { query.isEmpty || $0.name.localizedCaseInsensitiveContains(query) || bridgeName(for: $0).localizedCaseInsensitiveContains(query) }, id: \.uniqueIdentifier) { accessory in
+                Section("\(accessory.name) · \(bridgeName(for: accessory))") {
                     ForEach(accessory.services.filter { service in !group.services.contains { $0.uniqueIdentifier == service.uniqueIdentifier } }, id: \.uniqueIdentifier) { service in
                         Button {
                             group.addService(service) { error in
@@ -181,6 +188,24 @@ struct AddGroupServicesView: View {
             VStack { if !status.isEmpty { Text(status) }; Button("Done") { dismiss() } }.padding()
         }
     }
+
+    private func bridgeName(for accessory: HMAccessory) -> String {
+        home.accessories.first { $0.identifiersForBridgedAccessories?.contains(accessory.uniqueIdentifier) == true }?.name ?? "Direct"
+    }
+
+    private func addServices(_ services: [HMService]) {
+        let pending = services.filter { service in
+            service.serviceType != HMServiceTypeAccessoryInformation
+                && !group.services.contains { $0.uniqueIdentifier == service.uniqueIdentifier }
+        }
+        guard !pending.isEmpty else { status = "No new services to add"; return }
+        let dispatch = DispatchGroup(); let errors = SendableErrorBox()
+        for service in pending {
+            dispatch.enter(); group.addService(service) { error in errors.record(error); dispatch.leave() }
+        }
+        dispatch.notify(queue: .main) { status = errors.error?.localizedDescription ?? "Added \(pending.count) services" }
+    }
+
 }
 
 struct AutomationsListView: View {
@@ -264,6 +289,7 @@ struct AccessoryDetailView: View {
     @State private var query = ""
     @State private var editedName = ""
     @State private var renameStatus = ""
+    @State private var showingReassign = false
 
     var body: some View {
         List {
@@ -275,6 +301,7 @@ struct AccessoryDetailView: View {
                 LabeledContent("Manufacturer", value: accessory.manufacturer ?? "Unknown")
                 LabeledContent("Model", value: accessory.model ?? "Unknown")
                 LabeledContent("Reachable", value: accessory.isReachable ? "Yes" : "No")
+                Button("Reassign Everywhere", systemImage: "arrow.triangle.swap") { showingReassign = true }
             }
             Section("Services") {
                 ForEach(accessory.services.filter { query.isEmpty || $0.name.localizedCaseInsensitiveContains(query) || $0.localizedDescription.localizedCaseInsensitiveContains(query) || serviceSummary($0).localizedCaseInsensitiveContains(query) }, id: \.uniqueIdentifier) { service in
@@ -315,6 +342,9 @@ struct AccessoryDetailView: View {
         .searchable(text: $query, prompt: "Search services")
         .homeKittenBackButton()
         .onAppear { if editedName.isEmpty { editedName = accessory.name } }
+        .sheet(isPresented: $showingReassign) {
+            NavigationStack { ReassignToolView(home: home, sourceName: accessory.name, sourceID: accessory.uniqueIdentifier, sourceServices: accessory.services) }
+        }
     }
 }
 
@@ -324,6 +354,7 @@ struct ServiceGroupDetailView: View {
     @State private var editedName = ""
     @State private var status = ""
     @State private var showingAddServices = false
+    @State private var showingReassign = false
 
     var body: some View {
         List {
@@ -331,6 +362,7 @@ struct ServiceGroupDetailView: View {
                 TextField("Name", text: $editedName)
                 Button("Rename Group") { group.updateName(editedName) { report($0, "Renamed") } }
                 Button("Add Constituent Services") { showingAddServices = true }
+                Button("Reassign Everywhere", systemImage: "arrow.triangle.swap") { showingReassign = true }
                 if !status.isEmpty { Text(status).foregroundStyle(.secondary) }
             }
             Section("Constituent Accessories") {
@@ -362,6 +394,9 @@ struct ServiceGroupDetailView: View {
         .homeKittenBackButton()
         .onAppear { if editedName.isEmpty { editedName = group.name } }
         .sheet(isPresented: $showingAddServices) { NavigationStack { AddGroupServicesView(home: home, group: group) } }
+        .sheet(isPresented: $showingReassign) {
+            NavigationStack { ReassignToolView(home: home, sourceName: group.name, sourceID: group.uniqueIdentifier, sourceServices: group.services) }
+        }
     }
 
     private var constituents: [HMAccessory] {

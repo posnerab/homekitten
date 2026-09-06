@@ -12,6 +12,9 @@
 		A00000000000000000000012 /* HomeStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000002 /* HomeStore.swift */; };
 		A00000000000000000000013 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000003 /* ContentView.swift */; };
 		A00000000000000000000014 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000005 /* Assets.xcassets */; };
+		A00000000000000000000015 /* HomeBackup.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000006 /* HomeBackup.swift */; };
+		A00000000000000000000016 /* Reassign.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000007 /* Reassign.swift */; };
+		A00000000000000000000017 /* ShortcutsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000008 /* ShortcutsView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -21,6 +24,9 @@
 		A00000000000000000000003 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		A00000000000000000000004 /* HomeKitten.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; path = HomeKitten.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A00000000000000000000005 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		A00000000000000000000006 /* HomeBackup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeBackup.swift; sourceTree = "<group>"; };
+		A00000000000000000000007 /* Reassign.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Reassign.swift; sourceTree = "<group>"; };
+		A00000000000000000000008 /* ShortcutsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShortcutsView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -50,6 +56,9 @@
 				A00000000000000000000002 /* HomeStore.swift */,
 				A00000000000000000000003 /* ContentView.swift */,
 				240A3239300345D100808513 /* HomeDetailView.swift */,
+				A00000000000000000000006 /* HomeBackup.swift */,
+				A00000000000000000000007 /* Reassign.swift */,
+				A00000000000000000000008 /* ShortcutsView.swift */,
 			);
 			path = Sources/HomeKitten;
 			sourceTree = "<group>";
@@ -143,6 +152,9 @@
 				A00000000000000000000012 /* HomeStore.swift in Sources */,
 				240A323A300345D100808513 /* HomeDetailView.swift in Sources */,
 				A00000000000000000000013 /* ContentView.swift in Sources */,
+				A00000000000000000000015 /* HomeBackup.swift in Sources */,
+				A00000000000000000000016 /* Reassign.swift in Sources */,
+				A00000000000000000000017 /* ShortcutsView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
