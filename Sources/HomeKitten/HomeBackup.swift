@@ -21,6 +21,13 @@ struct BackupAccessory: Codable, Identifiable, Sendable {
     let roomName: String?
     let manufacturer: String?
     let model: String?
+    let categoryType: String?
+    let serviceTypes: [String]
+    let serialNumber: String?
+    let firmwareVersion: String?
+    let isReachable: Bool
+    let bridgeID: UUID?
+    let bridgeName: String?
 }
 
 struct BackupRoom: Codable, Identifiable, Sendable { let id: UUID; let name: String }
@@ -85,11 +92,20 @@ struct BackupAutomation: Codable, Identifiable, Sendable {
 @MainActor
 enum HomeBackupService {
     static func makeBackup(home: HMHome) -> HomeBackup {
-        HomeBackup(
+        let bridgeByAccessoryID = Dictionary(uniqueKeysWithValues: home.accessories.flatMap { bridge in
+            bridge.bridgedAccessories.map { child in (child.uniqueIdentifier, bridge) }
+        })
+        return HomeBackup(
             id: UUID(), createdAt: Date(), homeID: home.uniqueIdentifier, homeName: home.name,
             accessories: home.accessories.map {
-                BackupAccessory(id: $0.uniqueIdentifier, name: $0.name, roomID: $0.room?.uniqueIdentifier,
-                                roomName: $0.room?.name, manufacturer: $0.manufacturer, model: $0.model)
+                let bridge = bridgeByAccessoryID[$0.uniqueIdentifier]
+                return BackupAccessory(id: $0.uniqueIdentifier, name: $0.name, roomID: $0.room?.uniqueIdentifier,
+                                roomName: $0.room?.name, manufacturer: $0.manufacturer, model: $0.model,
+                                categoryType: $0.category.categoryType,
+                                serviceTypes: Array(Set($0.services.map(\.serviceType))).sorted(),
+                                serialNumber: characteristicValue(HMCharacteristicTypeSerialNumber, for: $0),
+                                firmwareVersion: characteristicValue(HMCharacteristicTypeFirmwareVersion, for: $0),
+                                isReachable: $0.isReachable, bridgeID: bridge?.uniqueIdentifier, bridgeName: bridge?.name)
             }.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending },
             rooms: allRooms(home).map { BackupRoom(id: $0.uniqueIdentifier, name: $0.name) }
                 .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending },
@@ -221,6 +237,9 @@ enum HomeBackupService {
         return directory
     }
     private static func allRooms(_ home: HMHome) -> [HMRoom] { Array(Dictionary(grouping: home.rooms + [home.roomForEntireHome()], by: \.uniqueIdentifier).values.compactMap(\.first)) }
+    private static func characteristicValue(_ type: String, for accessory: HMAccessory) -> String? {
+        accessory.services.flatMap(\.characteristics).first { $0.characteristicType == type }?.value as? String
+    }
     private static func automationKind(_ trigger: HMTrigger) -> String { trigger is HMTimerTrigger ? "Timer" : trigger is HMEventTrigger ? "Event" : String(describing: type(of: trigger)) }
     private static func room(id: UUID?, name: String?, in home: HMHome) -> HMRoom? { allRooms(home).first { $0.uniqueIdentifier == id } ?? allRooms(home).first { $0.name == name } }
     private static func reference(_ service: HMService) -> BackupServiceReference { BackupServiceReference(accessoryID: service.accessory?.uniqueIdentifier ?? UUID(), serviceID: service.uniqueIdentifier) }
