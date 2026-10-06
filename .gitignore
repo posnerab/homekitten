@@ -4,6 +4,7 @@
 .DS_Store
 DerivedData/
 .codex-derived/
+.codex-derived-verify/
 *.xcuserstate
 *.xccheckout
 *.xcscmblueprint
