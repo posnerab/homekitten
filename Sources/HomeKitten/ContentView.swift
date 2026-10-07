@@ -12,6 +12,7 @@ private enum HomeSection: String, CaseIterable, Identifiable {
     case automations = "Automations"
     case shortcuts = "Shortcuts"
     case backups = "Backups"
+    case agent = "Agent Access"
     var id: Self { self }
 }
 
@@ -25,7 +26,6 @@ struct ContentView: View {
     @State private var showingNewGroup = false
     @State private var syncMessage = ""
     @State private var showingSyncResult = false
-    @State private var attemptedAutomaticSync = false
 
     private var selectedHome: HMHome? {
         store.homes.first { $0.uniqueIdentifier == selectedHomeID }
@@ -46,14 +46,7 @@ struct ContentView: View {
         }
         .onChange(of: selectedHomeID) { _, _ in
             selectedRoomID = nil
-            section = .home
-            guard !attemptedAutomaticSync, let home = selectedHome else { return }
-            attemptedAutomaticSync = true
-            Task {
-                do { syncMessage = try await WizNameSync.sync(home: home) }
-                catch { syncMessage = error.localizedDescription }
-                showingSyncResult = true
-            }
+            section = ProcessInfo.processInfo.arguments.contains("--agent-bridge") ? .agent : .home
         }
         .sheet(isPresented: $showingNewScene) {
             if let home = selectedHome { NavigationStack { NewSceneView(home: home) } }
@@ -71,6 +64,13 @@ struct ContentView: View {
         Group {
             if let home = selectedHome {
                 List(selection: $selectedRoomID) {
+                    Section {
+                        NavigationLink {
+                            AgentAccessView()
+                        } label: {
+                            Label("Agent Access", systemImage: "laptopcomputer.and.iphone")
+                        }
+                    }
                     Section("Rooms") {
                         ForEach(sidebarRooms(for: home), id: \.uniqueIdentifier) { room in
                             Button {
@@ -116,6 +116,7 @@ struct ContentView: View {
                 case .automations: AutomationsListView(home: home)
                 case .shortcuts: ShortcutsWorkspaceView()
                 case .backups: BackupsWorkspaceView(home: home)
+                case .agent: AgentAccessView()
                 }
             }
         } else {
@@ -167,6 +168,7 @@ struct ContentView: View {
             .disabled(selectedHome == nil)
         }
         ToolbarItem(placement: .topBarTrailing) {
+            #if targetEnvironment(macCatalyst)
             HStack(spacing: 4) {
                 ForEach(HomeSection.allCases) { item in
                     Button(item.rawValue) {
@@ -179,6 +181,16 @@ struct ContentView: View {
             }
             .padding(4)
             .background(.regularMaterial, in: Capsule())
+            #else
+            Menu("Browse", systemImage: "square.grid.2x2") {
+                ForEach(HomeSection.allCases) { item in
+                    Button(item.rawValue) {
+                        selectedRoomID = nil
+                        section = item
+                    }
+                }
+            }
+            #endif
         }
     }
 

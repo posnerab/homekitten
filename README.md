@@ -37,7 +37,15 @@ xcodebuild -project HomeKitten.xcodeproj -scheme HomeKitten \
 The Mac version lists shortcuts through ScriptingBridge. On iPhone and iPad,
 the Shortcuts panel opens Apple's Shortcuts app instead.
 
-## Future agent access
+## Agent access from a paired Mac
+
+On iPhone, open **Agent Access** and tap **Connect Paired Mac**. Keep that screen
+open and the phone unlocked. The Mac client uses Xcode's paired-device file
+service to read configuration and submit changes for review on the phone.
+No additional app, paid membership, LAN server, or bearer token is needed.
+See [USB agent usage](docs/USB_AGENT.md) for CLI and MCP setup.
+
+## Future Mac agent access
 
 The app is deliberately not an unauthenticated local HomeKit API. The planned
 agent bridge keeps HomeKitten as the signed, user-authorized HomeKit client and

@@ -8,7 +8,9 @@ struct HomeKittenApp: App {
         WindowGroup("HomeKitten") {
             ContentView()
                 .environment(store)
+                #if targetEnvironment(macCatalyst)
                 .frame(minWidth: 560, minHeight: 420)
+                #endif
         }
     }
 }

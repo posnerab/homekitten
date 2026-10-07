@@ -1,5 +1,9 @@
 # HomeKitten agent bridge
 
+This is the original Mac Catalyst architecture proposal. The implemented
+iPhone bridge uses the paired-device file service instead of a network server;
+see [USB agent usage](USB_AGENT.md) for its actual protocol and supported scope.
+
 ## Goal
 
 Let a locally paired coding agent inspect and manage the Apple Home database

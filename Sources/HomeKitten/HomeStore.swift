@@ -17,13 +17,13 @@ final class HomeStore: NSObject, @preconcurrency HMHomeManagerDelegate {
     }
 
     var authorizationDescription: String {
-        switch manager.authorizationStatus {
-        case .authorized: "Authorized"
-        case .restricted: "Restricted"
-        case .determined: "Not authorized"
-        default: "Waiting for permission"
-        }
+        if isAuthorized { return "Authorized" }
+        if manager.authorizationStatus.contains(.restricted) { return "Restricted" }
+        if manager.authorizationStatus.contains(.determined) { return "Not authorized" }
+        return "Waiting for permission"
     }
+
+    var isAuthorized: Bool { manager.authorizationStatus.contains(.authorized) }
 
     func homeManagerDidUpdateHomes(_ manager: HMHomeManager) {
         homes = manager.homes
