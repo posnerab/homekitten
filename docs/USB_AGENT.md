@@ -126,3 +126,41 @@ files are published atomically; the client rejects traversal outside the
 bridge directory. The Mac app stays connected while minimized, provided
 it remains running and the Mac stays awake. iPadOS still uses finite
 background execution. Do not mix object UUIDs from different source clients.
+
+## Automation rules inventory
+
+Inventory version 2 now includes `automationRulesVersion: 1` and
+`automationRulesSource: "HomeKit public API"`. Existing keys and write operations
+are unchanged. This is read-only discovery, not predicate/event editing.
+
+Each event automation exposes `events`, `endEvents`, `predicate`, `recurrences`,
+`executeOnce`, and activation state (including missing hub/location permission).
+Characteristic and threshold events include stable characteristic/service/accessory
+references and trigger values or ranges. Calendar events expose date components;
+sunrise/sunset events include signed offset components. Duration events use seconds.
+Presence events expose event/user scope; custom user membership is explicitly
+marked unavailable because the public API does not expose it. Location events
+include the exposed region and entry/exit flags. Timer triggers include their fire
+date, time zone, and recurrence components. Unspecified components remain absent;
+weekday numbers follow Foundation (Sunday 1, Saturday 7).
+
+Predicates retain their original `format` and a structured tree: AND/OR/NOT,
+comparison operator/modifier/options, and expressions. Characteristic constants
+resolve to UUIDs; date components, significant-time and presence constants retain
+structured details. Unknown predicates, expressions, events, or values include
+`supported: false`; unknown triggers report `rulesStatus: "unsupportedTrigger"`.
+A null predicate means HomeKit returned no predicate, not that hidden app/shortcut
+logic has been inspected. Predicates are never evaluated against cached values.
+
+Each automation also embeds its `actionSets`, and `scenes` includes the union of
+home scenes and trigger-owned action sets, deduplicated by UUID. This closes
+previous missing scene references. Actions unavailable through the public API are
+marked unsupported rather than silently omitted. Exported trigger-owned actions
+are for inspection; scene write resolution still follows the existing supported
+HomeKit scene scope. Apple Home shortcut internals and third-party runtime rules
+are not exposed by this inventory. All rules and location data remain private
+bridge-container data and must not be committed.
+
+Run `python3 -m unittest discover -s tests -v` to validate the client and the
+production Swift predicate serializer (Swift checks run on macOS). Validate event
+exports against a fresh signed-app inventory after installation.

@@ -37,6 +37,20 @@ class AgentTests(unittest.TestCase):
         self.assertTrue(captured[0][2].endswith(request["id"] + ".json"))
         self.assertEqual(result["state"], "submitted")
 
+    def test_mcp_inventory_preserves_automation_rules(self):
+        record = {"automationRulesVersion": 1, "homes": [{"automations": [{
+            "events": [{"kind": "HMSignificantTimeEvent", "offset": {"minute": -18}}],
+            "predicate": {"kind": "compound", "operator": "and", "children": []},
+            "actionSets": [{"id": "trigger-owned", "actions": [{"kind": "HMShortcutAction", "supported": False}]}],
+            "recurrences": [{"weekday": 7}], "endEvents": []}]}]}
+        source = io.StringIO(json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "home_inventory", "arguments": {}}}) + "\n")
+        output = io.StringIO()
+        client = agent.Client("device")
+        with patch.object(client, "inventory", return_value=record):
+            agent.serve(client, source, output)
+        response = json.loads(output.getvalue())
+        self.assertEqual(json.loads(response["result"]["content"][0]["text"]), record)
+
     def test_no_approve_operation_exposed(self):
         client = agent.Client("device")
         with self.assertRaises(ValueError):

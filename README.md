@@ -67,6 +67,8 @@ that expires and resumes when the app returns. Device transfer may require the
 phone to be unlocked.
 No additional app, paid membership, LAN server, or bearer token is needed.
 See [USB agent usage](docs/USB_AGENT.md) for CLI and MCP setup.
+The inventory exposes automation events, conditions, recurrence and timing rules,
+plus trigger-owned actions, with explicit markers for unavailable details.
 
 The original [Mac bridge proposal](docs/AGENT_BRIDGE.md) is historical. The
 implemented iPhone design is documented in [USB agent usage](docs/USB_AGENT.md).

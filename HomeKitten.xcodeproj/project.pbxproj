@@ -16,6 +16,8 @@
 		A00000000000000000000016 /* Reassign.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000007 /* Reassign.swift */; };
 		A00000000000000000000017 /* ShortcutsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000008 /* ShortcutsView.swift */; };
 		A00000000000000000000018 /* AgentBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000009 /* AgentBridge.swift */; };
+		B0000000000000000000001A /* AutomationRules.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0000000000000000000000A /* AutomationRules.swift */; };
+		B0000000000000000000001B /* AutomationInventory.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0000000000000000000000B /* AutomationInventory.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -29,6 +31,8 @@
 		A00000000000000000000007 /* Reassign.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Reassign.swift; sourceTree = "<group>"; };
 		A00000000000000000000008 /* ShortcutsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShortcutsView.swift; sourceTree = "<group>"; };
 		A00000000000000000000009 /* AgentBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentBridge.swift; sourceTree = "<group>"; };
+		B0000000000000000000000A /* AutomationRules.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutomationRules.swift; sourceTree = "<group>"; };
+		B0000000000000000000000B /* AutomationInventory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutomationInventory.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -62,6 +66,8 @@
 				A00000000000000000000007 /* Reassign.swift */,
 				A00000000000000000000008 /* ShortcutsView.swift */,
 				A00000000000000000000009 /* AgentBridge.swift */,
+				B0000000000000000000000B /* AutomationInventory.swift */,
+				B0000000000000000000000A /* AutomationRules.swift */,
 			);
 			path = Sources/HomeKitten;
 			sourceTree = "<group>";
@@ -159,6 +165,8 @@
 				A00000000000000000000016 /* Reassign.swift in Sources */,
 				A00000000000000000000017 /* ShortcutsView.swift in Sources */,
 				A00000000000000000000018 /* AgentBridge.swift in Sources */,
+				B0000000000000000000001B /* AutomationInventory.swift in Sources */,
+				B0000000000000000000001A /* AutomationRules.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -256,7 +264,7 @@
 				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = Resources/HomeKitten.mac.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CODE_SIGN_IDENTITY = "Apple Development";
-				CURRENT_PROJECT_VERSION = 3;
+				CURRENT_PROJECT_VERSION = 4;
 				DERIVE_MACCATALYST_PRODUCT_BUNDLE_IDENTIFIER = NO;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Resources/Info.plist;
@@ -283,7 +291,7 @@
 				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = Resources/HomeKitten.mac.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CODE_SIGN_IDENTITY = "Apple Development";
-				CURRENT_PROJECT_VERSION = 3;
+				CURRENT_PROJECT_VERSION = 4;
 				DERIVE_MACCATALYST_PRODUCT_BUNDLE_IDENTIFIER = NO;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Resources/Info.plist;

@@ -390,17 +390,14 @@ final class AgentBridge {
                         "bridgeID": bridges[accessory.uniqueIdentifier]?.uniqueIdentifier.uuidString ?? "",
                         "bridgeName": bridges[accessory.uniqueIdentifier]?.name ?? ""]
             }
-            let scenes: [[String: Any]] = home.actionSets.map { scene in
-                let actions: [[String: Any]] = scene.actions.compactMap { action in
-                    guard let action = action as? HMCharacteristicWriteAction<NSCopying> else { return nil }
-                    return ["characteristicID": action.characteristic.uniqueIdentifier.uuidString, "value": jsonValue(action.targetValue)]
-                }
-                return ["id": scene.uniqueIdentifier.uuidString, "name": scene.name, "actions": actions]
+            // Trigger-owned action sets are not necessarily listed in home.actionSets.
+            var actionSets = home.actionSets
+            var actionSetIDs = Set(actionSets.map(\.uniqueIdentifier))
+            for scene in home.triggers.flatMap(\.actionSets) where actionSetIDs.insert(scene.uniqueIdentifier).inserted {
+                actionSets.append(scene)
             }
-            let automations: [[String: Any]] = home.triggers.map { trigger in
-                ["id": trigger.uniqueIdentifier.uuidString, "name": trigger.name, "enabled": trigger.isEnabled,
-                 "kind": String(describing: type(of: trigger)), "sceneIDs": trigger.actionSets.map { $0.uniqueIdentifier.uuidString }]
-            }
+            let scenes = actionSets.map { AutomationInventory.actionSet($0) }
+            let automations = home.triggers.map { AutomationInventory.trigger($0) }
             let rooms: [[String: Any]] = home.rooms.map { ["id": $0.uniqueIdentifier.uuidString, "name": $0.name] }
             let zones: [[String: Any]] = home.zones.map {
                 ["id": $0.uniqueIdentifier.uuidString, "name": $0.name,
@@ -411,6 +408,7 @@ final class AgentBridge {
                     "zones": zones, "accessories": accessories, "scenes": scenes, "automations": automations]
         }
         try write(["version": 2, "active": true, "writesAllowed": writesAllowed, "capturedAt": isoNow(), "sessionID": sessionID.uuidString,
+                   "automationRulesVersion": 1, "automationRulesSource": "HomeKit public API",
                    "valuesAreCached": true, "homes": homes], to: "inventory.json")
     }
     private func jsonValue(_ value: Any?) -> Any {

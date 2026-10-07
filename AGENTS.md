@@ -93,6 +93,12 @@ enabled. Event/predicate editing, accessory pairing, Home/user management, and
 destructive deletion are not exposed by the bridge. Do not claim they work just
 because HomeKit or the manual UI offers related APIs.
 
+Inventory now includes public-API automation events, end events, predicate trees,
+recurrence/timing rules, activation state, and trigger-owned action sets. Check
+`automationRulesVersion` and unsupported markers before claiming a complete rule
+audit; shortcut internals and custom presence-user lists remain unavailable.
+This discovery does not add event/predicate editing.
+
 Inventory characteristic values are cached. A characteristic write attempts
 read-back when readable. An API result or cached value does not establish
 physical device behavior; report physical/visual verification separately.

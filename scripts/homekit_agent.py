@@ -115,7 +115,7 @@ class LocalClient(Client):
 
 def tool_definitions():
     return [
-        {"name": "home_inventory", "description": "Read current HomeKit configuration with UUIDs. Characteristic values are cached, not fresh sensor reads.",
+        {"name": "home_inventory", "description": "Read current HomeKit configuration with UUIDs, automation events, predicate conditions, timing/recurrence rules, and attached actions. Unsupported public-API details are marked. Characteristic values are cached, not fresh sensor reads.",
          "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False}},
         {"name": "home_change_execute", "description": "Execute one HomeKit change automatically in a app-authorized connection session. update_scene replaces ALL existing scene actions. create_timer creates a disabled timer unless enabled=true.",
          "inputSchema": {"type": "object", "required": ["operation", "homeID"],
