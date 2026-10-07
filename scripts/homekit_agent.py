@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
-"""HomeKitten paired-device client. No dependencies, network service, or secrets.
+"""HomeKitten paired-device and local Mac client. No dependencies, network service, or secrets.
 
-CLI: --device UDID inventory | submit request.json | result UUID | mcp
+CLI: (--device UDID | --local-bridge DIR) inventory | submit request.json | result UUID | mcp
 MCP uses newline-delimited JSON-RPC on stdin/stdout. Device diagnostics never
-appear on protocol stdout. The phone grants write access once per session.
+appear on protocol stdout. The app grants write access for its remembered connection.
 """
 import argparse
 import datetime
 import json
+import os
+import shutil
 import pathlib
 import subprocess
 import sys
@@ -43,7 +45,7 @@ class Client:
         captured = datetime.datetime.fromisoformat(result["capturedAt"].replace("Z", "+00:00"))
         age = (datetime.datetime.now(datetime.timezone.utc) - captured).total_seconds()
         if not result.get("active") or age > 15 or age < -5:
-            raise RuntimeError("Bridge is disconnected or inventory is stale. Connect on the phone's Agent Access screen.")
+            raise RuntimeError("Bridge is disconnected or inventory is stale. Connect on HomeKitten's Agent Access screen.")
         return result
 
     def submit(self, arguments):
@@ -59,7 +61,7 @@ class Client:
         request["id"] = str(uuid.uuid4()).upper()
         inventory = self.inventory()
         if not inventory.get("writesAllowed"):
-            raise RuntimeError("Read-only session. Reconnect on the phone with changes allowed.")
+            raise RuntimeError("Read-only session. Reconnect in HomeKitten with changes allowed.")
         request["sessionID"] = inventory["sessionID"]
         encoded = json.dumps(request, allow_nan=False).encode()
         if len(encoded) > 65536:
@@ -79,11 +81,43 @@ class Client:
             raise RuntimeError("Request is queued or device is unavailable; retry result retrieval")
 
 
+class LocalClient(Client):
+    """Use the running signed Mac app's private bridge directory."""
+    def __init__(self, directory):
+        self.directory = pathlib.Path(directory).expanduser().resolve()
+
+    def transfer(self, direction, source, destination):
+        relative = str(source if direction == "from" else destination)
+        prefix = "Documents/AgentBridge/"
+        if not relative.startswith(prefix):
+            raise ValueError("Invalid bridge path")
+        target = (self.directory / relative[len(prefix):]).resolve()
+        if not target.is_relative_to(self.directory):
+            raise ValueError("Path escapes the bridge directory")
+        try:
+            if direction == "from":
+                shutil.copyfile(target, destination)
+            elif direction == "to":
+                # Publish complete requests atomically so the app never sees partial JSON.
+                with tempfile.NamedTemporaryFile(dir=target.parent, prefix=".request-", delete=False) as output:
+                    temporary = pathlib.Path(output.name)
+                    try:
+                        output.write(pathlib.Path(source).read_bytes())
+                        output.flush()
+                        os.replace(temporary, target)
+                    finally:
+                        temporary.unlink(missing_ok=True)
+            else:
+                raise ValueError("Invalid transfer direction")
+        except OSError as error:
+            raise RuntimeError("Local bridge file access failed. Keep the signed Mac app running with Agent Access connected.") from error
+
+
 def tool_definitions():
     return [
         {"name": "home_inventory", "description": "Read current HomeKit configuration with UUIDs. Characteristic values are cached, not fresh sensor reads.",
          "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False}},
-        {"name": "home_change_execute", "description": "Execute one HomeKit change automatically in a phone-authorized connection session. update_scene replaces ALL existing scene actions. create_timer creates a disabled timer unless enabled=true.",
+        {"name": "home_change_execute", "description": "Execute one HomeKit change automatically in a app-authorized connection session. update_scene replaces ALL existing scene actions. create_timer creates a disabled timer unless enabled=true.",
          "inputSchema": {"type": "object", "required": ["operation", "homeID"],
                          "additionalProperties": False, "properties": {
                              "operation": {"type": "string", "enum": OPERATIONS},
@@ -146,14 +180,16 @@ def serve(client, input_stream=sys.stdin, output_stream=sys.stdout):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--device", required=True)
+    transport = parser.add_mutually_exclusive_group(required=True)
+    transport.add_argument("--device", help="Paired iPhone or iPad UDID")
+    transport.add_argument("--local-bridge", type=pathlib.Path, help="Running Mac app AgentBridge directory")
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("inventory")
     commands.add_parser("mcp")
     commands.add_parser("submit").add_argument("request", type=pathlib.Path)
     commands.add_parser("result").add_argument("id")
     args = parser.parse_args()
-    client = Client(args.device)
+    client = LocalClient(args.local_bridge) if args.local_bridge else Client(args.device)
     if args.command == "mcp":
         serve(client)
         return

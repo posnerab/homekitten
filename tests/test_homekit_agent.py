@@ -3,6 +3,7 @@ import importlib.util
 import io
 import json
 import pathlib
+import tempfile
 import unittest
 import uuid
 from unittest.mock import patch
@@ -63,6 +64,34 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(responses[0]["id"], 1)
         self.assertIn("error", responses[1])
         self.assertEqual(responses[2]["result"], {})
+
+    def test_local_transport_keeps_session_and_publishes_complete_request(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = pathlib.Path(temp)
+            (root / "incoming").mkdir()
+            (root / "responses").mkdir()
+            record = {"active": True, "writesAllowed": True, "sessionID": "local-session",
+                      "capturedAt": datetime.datetime.now(datetime.timezone.utc).isoformat()}
+            (root / "inventory.json").write_text(json.dumps(record))
+            client = agent.LocalClient(root)
+            with patch.object(agent.subprocess, "run", side_effect=AssertionError("device transfer forbidden")):
+                result = client.submit({"operation": "rename_accessory", "homeID": str(uuid.uuid4()), "name": "Test"})
+                request = json.loads((root / "incoming" / (result["id"] + ".json")).read_text())
+                self.assertEqual(request["sessionID"], "local-session")
+                self.assertEqual(list(root.glob("incoming/.request-*")), [])
+                response = {"state": "succeeded"}
+                (root / "responses" / (result["id"] + ".json")).write_text(json.dumps(response))
+                self.assertEqual(client.result(result["id"]), response)
+            (root / "inventory.json").write_text(json.dumps(dict(record, writesAllowed=False)))
+            with self.assertRaises(RuntimeError):
+                client.submit({"operation": "rename_accessory", "homeID": str(uuid.uuid4()), "name": "Test"})
+
+    def test_local_transport_rejects_paths_outside_bridge(self):
+        with tempfile.TemporaryDirectory() as temp:
+            client = agent.LocalClient(temp)
+            for path in ["Documents/AgentBridge/../outside.json", "wrong-prefix/inventory.json"]:
+                with self.assertRaises(ValueError):
+                    client.transfer("from", path, pathlib.Path(temp) / "output.json")
 
 
 if __name__ == "__main__":

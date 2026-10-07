@@ -55,3 +55,24 @@ See [USB agent usage](docs/USB_AGENT.md) for CLI and MCP setup.
 
 The original [Mac bridge proposal](docs/AGENT_BRIDGE.md) is historical. The
 implemented iPhone design is documented in [USB agent usage](docs/USB_AGENT.md).
+
+## Paid development builds and local Mac bridge
+
+The enrolled Developer Team now provisions iPad and Mac Catalyst development
+builds with HomeKit. Fresh paid profiles were verified on October 6, 2026,
+expiring October 6, 2027 (Central time). Inspect the actual embedded profile
+after each release; do not reuse cached seven-day Personal Team profiles.
+
+The signed Mac app is installed under `~/Applications/HomeKitten.app`. Its
+Agent Access bridge can be read directly without a paired iPad:
+
+```sh
+python3 scripts/homekit_agent.py --local-bridge ~/Documents/AgentBridge inventory
+python3 scripts/homekit_agent.py --local-bridge ~/Documents/AgentBridge mcp
+```
+
+The app must remain running and the Mac awake. Minimizing the window keeps
+the bridge available. Quit or sleep prevents access; stale snapshots are
+rejected. Existing session authorization, backups and transaction safeguards
+apply to both transports. Paid membership does not remove iPadOS background
+suspension. TestFlight/App Store distribution remains a separate release.

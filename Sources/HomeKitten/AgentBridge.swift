@@ -117,6 +117,10 @@ final class AgentBridge {
     }
 
     func background() {
+        #if targetEnvironment(macCatalyst)
+        // A desktop process can keep serving files while its window is minimized.
+        return
+        #else
         guard running, backgroundTask == .invalid else { return }
         backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "HomeKitten Agent Connection") { [weak self] in
             Task { @MainActor in
@@ -125,6 +129,7 @@ final class AgentBridge {
             }
         }
         if backgroundTask == .invalid { stop(preserveConnection: true) }
+        #endif
     }
 
     private func endBackgroundTask() {
@@ -436,7 +441,11 @@ struct AgentAccessView: View {
     var body: some View {
         Form {
             Section("Mac Connection") {
+                #if targetEnvironment(macCatalyst)
+                Text("The local Mac client can work with your Home while this app runs, including with its window minimized. Access pauses when the Mac sleeps or the app quits.")
+                #else
                 Text("Your paired Mac can work with your Home from any screen. iOS may pause the connection in the background; opening the app resumes it.")
+                #endif
                 Text(bridge.status).font(.caption)
                 if bridge.running { Button("Disconnect") { bridge.stop() }.disabled(bridge.busy) }
                 else {

@@ -7,9 +7,10 @@ workspace. Read `README.md` and `docs/USB_AGENT.md` before editing or operating
 it. `docs/AGENT_BRIDGE.md` is a historical Mac proposal, not the implemented
 transport or current approval policy.
 
-The supported, installed agent path is the iPhone app plus
-`scripts/homekit_agent.py` on the paired Mac. The Mac uses Xcode's `devicectl`
-app-container file service; the phone owns `HMHomeManager` and all HomeKit calls.
+The supported agent paths are the signed Mac app with local files, or the iPhone/iPad app plus
+`scripts/homekit_agent.py` on the paired Mac. The paired-device mode uses Xcode's `devicectl` app-container file service;
+the phone owns HomeKit calls. Local mode uses the signed Mac app's bridge files
+and its own `HMHomeManager`.
 There is no HTTP listener, cloud relay, bearer token, or additional app to
 install. Do not assume the MCP server has been registered with the running
 agent: the Python CLI works directly from the terminal, and `mcp` mode is an
@@ -24,7 +25,8 @@ optional stdio tool server.
 - Connection and write mode are remembered in app settings until **Disconnect**
   is tapped. The bridge is owned by `HomeKittenApp`, not a particular screen.
   Navigating away from Agent Access must not disconnect it.
-- Foreground return resumes an enabled bridge. Background access is best effort
+- On Mac Catalyst, minimizing keeps an enabled bridge running; sleep or quit stops access.
+- On iPhone/iPad, foreground return resumes an enabled bridge. Background access is best effort
   through finite UIKit background execution, then pauses on expiration. Never
   claim an always-running iOS server, or add unrelated audio/location/Bluetooth
   background modes to evade suspension.
@@ -99,8 +101,9 @@ physical device behavior; report physical/visual verification separately.
 
 The physical iPhone build was verified with a free Personal Team and the actual
 HomeKit entitlement. Do not tell the user to buy a developer membership for this
-verified iPhone path. A signed Mac Catalyst build remains unverified on this
-machine and previously failed provisioning. Do not substitute unsigned/ad-hoc
+verified iPhone path. Paid-team signed Mac Catalyst provisioning and live Home access are now
+verified on this machine. Use `--local-bridge ~/Documents/AgentBridge` for
+the installed Mac app; it must remain running with the Mac awake. Do not substitute unsigned/ad-hoc
 signing for actual HomeKit authorization.
 
 ```sh
@@ -152,7 +155,11 @@ source push alone is not an installed app release.
 
 ## Verified baseline and next work
 
-As of October 6, 2026: the signed app was installed on the physical iPhone;
+As of October 6, 2026: paid-team builds are installed on the physical iPad and
+in `~/Applications/HomeKitten.app` on the Mac. Both have fresh live inventory;
+local Mac access continues with the window minimized. Both paid profiles
+expire October 6, 2027 Central. Seven client tests and both signed builds pass.
+The earlier signed app was installed on the physical iPhone;
 live inventory retrieval, invalid-UUID rejection, and version-2
 `active: true` / `writesAllowed: true` were confirmed. Signed iPhone and unsigned
 Catalyst builds passed, as did five Python client tests. The workspace was clean

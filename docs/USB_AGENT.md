@@ -115,3 +115,14 @@ from HomeKit, since its characteristic value may remain unavailable.
 Inventory also exports HomeKit zones with room UUID membership. Service groups
 retain their service UUIDs; clients can resolve accessory membership without
 matching display names.
+
+## Signed Mac local transport
+
+A paid-team signed Mac Catalyst build is now verified with live Home access.
+Use `--local-bridge ~/Documents/AgentBridge` instead of `--device <UDID>`
+for the installed Mac app. This provides the same inventory, submit, result
+and optional stdio MCP interface with no network listener. Local request
+files are published atomically; the client rejects traversal outside the
+bridge directory. The Mac app stays connected while minimized, provided
+it remains running and the Mac stays awake. iPadOS still uses finite
+background execution. Do not mix object UUIDs from different source clients.
