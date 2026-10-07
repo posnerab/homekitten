@@ -1,4 +1,5 @@
 import SwiftUI
+#if canImport(ScriptingBridge)
 import ScriptingBridge
 
 struct ShortcutRecord: Identifiable, Sendable {
@@ -110,3 +111,17 @@ struct ShortcutsWorkspaceView: View {
         return "\(shortcut.subtitle) · \(shortcut.actionCount) actions"
     }
 }
+#else
+struct ShortcutsWorkspaceView: View {
+    var body: some View {
+        ContentUnavailableView {
+            Label("Shortcuts", systemImage: "command.square")
+        } description: {
+            Text("Open Shortcuts to browse and run your shortcuts on this device.")
+        } actions: {
+            Link("Open Shortcuts", destination: URL(string: "shortcuts://")!)
+        }
+        .navigationTitle("Shortcuts")
+    }
+}
+#endif

@@ -1,9 +1,8 @@
 # HomeKitten
 
-Mac Catalyst HomeKit manager. It reads and controls HomeKit accessories, and
+iPhone, iPad, and Mac Catalyst HomeKit manager. It reads and controls HomeKit accessories, and
 manages rooms, groups, scenes, automations, backups, and reassignment.
-HomeKit is unavailable to native macOS apps, so HomeKitten must remain a
-Mac Catalyst target.
+The Mac version uses Mac Catalyst to access HomeKit.
 
 ## Prerequisites
 
@@ -20,6 +19,23 @@ xcodebuild -project HomeKitten.xcodeproj -scheme HomeKitten \
 ```
 
 HomeKit rejects an ad-hoc signature. The signing identity and App ID must belong to a developer team with HomeKit enabled.
+
+### Connected iPhone
+
+Select the connected phone as the run destination in Xcode, then build and run.
+The iPhone build can be provisioned with a free Personal Team; this was verified
+on a physical iPhone on October 6, 2026, with the HomeKit entitlement present in
+the installed app's signature. Accept Home access on the phone before browsing
+homes. Free provisioning expires periodically and requires rebuilding.
+
+```sh
+xcodebuild -project HomeKitten.xcodeproj -scheme HomeKitten \
+  -destination 'platform=iOS,id=<connected-phone-UDID>' \
+  -allowProvisioningUpdates -allowProvisioningDeviceRegistration build
+```
+
+The Mac version lists shortcuts through ScriptingBridge. On iPhone and iPad,
+the Shortcuts panel opens Apple's Shortcuts app instead.
 
 ## Future agent access
 
