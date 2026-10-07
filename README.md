@@ -12,7 +12,9 @@ and the distinction between verified behavior and remaining live tests.
 
 1. Open `HomeKitten.xcodeproj` in Xcode.
 2. Select the HomeKitten target, then Signing & Capabilities.
-3. Choose your Apple Developer team and replace `com.example.HomeKitten` with a unique App ID.
+3. The workspace uses team `J8LT8K7ZG7`, automatic Apple Development signing,
+   and stable App ID `abie.ios.homekitten` on every platform. Keep this ID on
+   upgrades so the installed app retains its data and privacy identity.
 4. Confirm the HomeKit capability remains enabled.
 
 Build from the command line after configuring the team in Xcode:
@@ -23,6 +25,19 @@ xcodebuild -project HomeKitten.xcodeproj -scheme HomeKitten \
 ```
 
 HomeKit rejects an ad-hoc signature. The signing identity and App ID must belong to a developer team with HomeKit enabled.
+
+From Projects, use the shared certificate-pinned build/verification wrapper:
+
+```sh
+python3 scripts/apple_apps.py build homekitten --platform mac
+python3 scripts/apple_apps.py build homekitten --platform ios --device <paired-device-UDID>
+```
+
+See [the shared app policy](../APPLE_APPS.md). Embedded profiles from builds
+signed with revoked certificates must be regenerated.
+The iOS entitlement file grants HomeKit only. The Mac Catalyst override adds
+the existing Shortcuts Apple Events permissions; those Mac permissions are not
+included in iPhone/iPad signatures.
 
 ### Connected iPhone
 
