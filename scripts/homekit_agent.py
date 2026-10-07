@@ -3,7 +3,7 @@
 
 CLI: --device UDID inventory | submit request.json | result UUID | mcp
 MCP uses newline-delimited JSON-RPC on stdin/stdout. Device diagnostics never
-appear on protocol stdout. State changes are only proposed, never approved here.
+appear on protocol stdout. The phone grants write access once per session.
 """
 import argparse
 import datetime
@@ -43,7 +43,7 @@ class Client:
         captured = datetime.datetime.fromisoformat(result["capturedAt"].replace("Z", "+00:00"))
         age = (datetime.datetime.now(datetime.timezone.utc) - captured).total_seconds()
         if not result.get("active") or age > 15 or age < -5:
-            raise RuntimeError("Bridge is disconnected or inventory is stale. Tap Connect Paired Mac on the phone.")
+            raise RuntimeError("Bridge is disconnected or inventory is stale. Connect on the phone's Agent Access screen.")
         return result
 
     def submit(self, arguments):
@@ -57,7 +57,10 @@ class Client:
             if request.get(key):
                 request[key] = str(uuid.UUID(request[key])).upper()
         request["id"] = str(uuid.uuid4()).upper()
-        request["sessionID"] = self.inventory()["sessionID"]
+        inventory = self.inventory()
+        if not inventory.get("writesAllowed"):
+            raise RuntimeError("Read-only session. Reconnect on the phone with changes allowed.")
+        request["sessionID"] = inventory["sessionID"]
         encoded = json.dumps(request, allow_nan=False).encode()
         if len(encoded) > 65536:
             raise ValueError("Request too large")
@@ -66,24 +69,21 @@ class Client:
             incoming.write_bytes(encoded)
             self.transfer("to", incoming, "Documents/AgentBridge/incoming/" + incoming.name)
         return {"id": request["id"], "state": "submitted",
-                "message": "Review and approve or decline on the phone; use home_change_result to retrieve the outcome."}
+                "message": "Queued for automatic execution in the authorized session; use home_change_result to retrieve the outcome."}
 
     def result(self, transaction):
         transaction = str(uuid.UUID(transaction)).upper()
         try:
             return self.read("responses/" + transaction + ".json")
         except RuntimeError:
-            pending = self.read("pending.json")
-            if pending.get("id") == transaction:
-                return pending
-            raise RuntimeError("Request has not been reviewed yet or device is unavailable")
+            raise RuntimeError("Request is queued or device is unavailable; retry result retrieval")
 
 
 def tool_definitions():
     return [
         {"name": "home_inventory", "description": "Read current HomeKit configuration with UUIDs. Characteristic values are cached, not fresh sensor reads.",
          "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False}},
-        {"name": "home_change_propose", "description": "Propose one HomeKit change for approval on the phone. Never executes without approval. update_scene replaces ALL existing scene actions. create_timer creates a disabled timer unless enabled=true.",
+        {"name": "home_change_execute", "description": "Execute one HomeKit change automatically in a phone-authorized connection session. update_scene replaces ALL existing scene actions. create_timer creates a disabled timer unless enabled=true.",
          "inputSchema": {"type": "object", "required": ["operation", "homeID"],
                          "additionalProperties": False, "properties": {
                              "operation": {"type": "string", "enum": OPERATIONS},
@@ -98,7 +98,7 @@ def tool_definitions():
                              "fireDate": {"type": "string", "description": "Future ISO 8601 UTC date, e.g. 2026-10-07T12:00:00Z"},
                              "recurrenceMinutes": {"type": "integer", "minimum": 1, "maximum": 525600},
                              "enabled": {"type": "boolean"}}}},
-        {"name": "home_change_result", "description": "Read approval and execution outcome by transaction UUID.",
+        {"name": "home_change_result", "description": "Read execution outcome by transaction UUID.",
          "inputSchema": {"type": "object", "required": ["id"], "properties": {"id": {"type": "string", "format": "uuid"}}, "additionalProperties": False}}
     ]
 
@@ -117,7 +117,7 @@ def dispatch(client, method, params):
             name = params["name"]
             if name == "home_inventory":
                 result = client.inventory()
-            elif name == "home_change_propose":
+            elif name in ("home_change_execute", "home_change_propose"):
                 result = client.submit(args)
             elif name == "home_change_result":
                 result = client.result(args["id"])

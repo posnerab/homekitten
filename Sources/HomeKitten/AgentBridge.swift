@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import UIKit
 @preconcurrency import HomeKit
 
 // The paired-device file service is the transport. No network listener or token.
@@ -56,26 +57,34 @@ final class AgentBridge {
     private(set) var pending: AgentRequest?
     private(set) var preview = ""
     private(set) var busy = false
+    private(set) var writesAllowed = false
     private var sessionID = UUID()
     private var timer: Timer?
     private var store: HomeStore?
-    private var pendingSince: Date?
+    private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
+    private var wantsConnection = UserDefaults.standard.bool(forKey: "agentBridge.enabled")
+    private var requestedChanges = UserDefaults.standard.bool(forKey: "agentBridge.allowChanges")
     private let directory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         .appendingPathComponent("AgentBridge", isDirectory: true)
 
-    func start(_ store: HomeStore) {
+    func start(_ store: HomeStore, allowChanges: Bool) {
         guard !running, store.isAuthorized, store.isReady else {
             if !store.isAuthorized { status = "Home access is required." }
             return
         }
         self.store = store
+        wantsConnection = true
+        requestedChanges = allowChanges
+        UserDefaults.standard.set(true, forKey: "agentBridge.enabled")
+        UserDefaults.standard.set(allowChanges, forKey: "agentBridge.allowChanges")
         sessionID = UUID()
+        writesAllowed = allowChanges
         do {
             for name in ["incoming", "responses", "backups"] {
                 try FileManager.default.createDirectory(at: directory.appendingPathComponent(name), withIntermediateDirectories: true)
             }
             running = true
-            status = "Connected over paired device access"
+            status = allowChanges ? "Connected — changes allowed for this session" : "Connected — read only"
             tick()
             timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
                 Task { @MainActor in self?.tick() }
@@ -83,23 +92,48 @@ final class AgentBridge {
         } catch { status = error.localizedDescription }
     }
 
-    func stop() {
+    func stop(preserveConnection: Bool = false) {
+        if !preserveConnection {
+            wantsConnection = false
+            UserDefaults.standard.set(false, forKey: "agentBridge.enabled")
+        }
         timer?.invalidate(); timer = nil
         running = false
+        writesAllowed = false
         if let request = pending, !busy { respond(request, state: "rejected", message: "Session closed") }
         pending = nil
         status = "Disconnected"
         try? write(["active": false, "capturedAt": isoNow(), "sessionID": sessionID.uuidString], to: "inventory.json")
+        endBackgroundTask()
+    }
+
+    func resume(_ store: HomeStore) {
+        endBackgroundTask()
+        if wantsConnection && !running { start(store, allowChanges: requestedChanges) }
+    }
+
+    func background() {
+        guard running, backgroundTask == .invalid else { return }
+        backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "HomeKitten Agent Connection") { [weak self] in
+            Task { @MainActor in
+                self?.stop(preserveConnection: true)
+                self?.status = "Paused by iOS — resumes when the app opens"
+            }
+        }
+        if backgroundTask == .invalid { stop(preserveConnection: true) }
+    }
+
+    private func endBackgroundTask() {
+        if backgroundTask != .invalid {
+            UIApplication.shared.endBackgroundTask(backgroundTask)
+            backgroundTask = .invalid
+        }
     }
 
     private func tick() {
-        guard running, let store, store.isAuthorized else { stop(); return }
+        guard running, let store, store.isAuthorized else { stop(preserveConnection: true); return }
         do {
             try publish(store)
-            if let pendingSince, Date().timeIntervalSince(pendingSince) > 300, let pending, !busy {
-                respond(pending, state: "expired", message: "Approval expired")
-                self.pending = nil
-            }
             guard pending == nil, !busy else { return }
             let files = try FileManager.default.contentsOfDirectory(at: directory.appendingPathComponent("incoming"), includingPropertiesForKeys: nil)
                 .filter { $0.pathExtension == "json" && !FileManager.default.fileExists(atPath: directory.appendingPathComponent("responses/\($0.lastPathComponent)").path) }
@@ -114,38 +148,35 @@ final class AgentBridge {
                     respond(request, state: "rejected", message: "Stale session; read inventory again")
                     continue
                 }
+                guard writesAllowed else {
+                    respond(request, state: "rejected", message: "Read-only session; reconnect with changes allowed")
+                    continue
+                }
                 do {
                     preview = try describe(request)
-                    pending = request; pendingSince = Date()
-                    // Approval is memory-only. Never write an executable approval token.
-                    try write(["id": request.id.uuidString, "state": "pending", "preview": preview], to: "pending.json")
+                    pending = request
+                    Task { await self.apply(request) }
                     break
                 } catch { respond(request, state: "rejected", message: error.localizedDescription) }
             }
         } catch { status = error.localizedDescription }
     }
 
-    func reject() {
-        guard let pending, !busy else { return }
-        respond(pending, state: "rejected", message: "Declined on phone")
-        self.pending = nil
-    }
-
-    func approve() async {
-        guard let request = pending, !busy, running, let store, store.isAuthorized,
-              let pendingSince, Date().timeIntervalSince(pendingSince) <= 300 else { return }
+    private func apply(_ request: AgentRequest) async {
+        guard pending?.id == request.id, request.sessionID == sessionID,
+              !busy, running, writesAllowed, let store, store.isAuthorized else { return }
         busy = true
         // Persist consumption before the first HomeKit write: no replay after a crash.
         do {
             guard try describe(request) == preview else { throw failure("Home configuration changed; submit a fresh request") }
-            try write(["id": request.id.uuidString, "state": "executing", "message": "Approved on phone", "updatedAt": isoNow()], to: "responses/\(request.id.uuidString).json")
+            try write(["id": request.id.uuidString, "state": "executing", "message": "Authorized connection session", "updatedAt": isoNow()], to: "responses/\(request.id.uuidString).json")
             let home = try resolveHome(request)
             let encoder = JSONEncoder(); encoder.dateEncodingStrategy = .iso8601
             try encoder.encode(HomeBackupService.makeBackup(home: home))
                 .write(to: directory.appendingPathComponent("backups/\(request.id.uuidString).json"), options: .atomic)
             let result = try await execute(request, home: home)
             respond(request, state: "completed", message: result)
-            try publish(store)
+            if running { try publish(store) }
         } catch {
             respond(request, state: "failed", message: "\(error.localizedDescription). A multi-step operation may have partially completed; inspect Home before retrying.")
         }
@@ -335,7 +366,7 @@ final class AgentBridge {
             return ["id": home.uniqueIdentifier.uuidString, "name": home.name, "rooms": rooms, "groups": groups,
                     "accessories": accessories, "scenes": scenes, "automations": automations]
         }
-        try write(["version": 1, "active": true, "capturedAt": isoNow(), "sessionID": sessionID.uuidString,
+        try write(["version": 2, "active": true, "writesAllowed": writesAllowed, "capturedAt": isoNow(), "sessionID": sessionID.uuidString,
                    "valuesAreCached": true, "homes": homes], to: "inventory.json")
     }
     private func jsonValue(_ value: Any?) -> Any {
@@ -360,29 +391,32 @@ final class AgentBridge {
 
 struct AgentAccessView: View {
     @Environment(HomeStore.self) private var store
-    @Environment(\.scenePhase) private var phase
-    @State private var bridge = AgentBridge()
+    @Environment(AgentBridge.self) private var bridge
+    @State private var allowChanges = true
 
     var body: some View {
         Form {
             Section("Mac Connection") {
-                Text("Keep HomeKitten open here while your paired Mac reads your Home or sends a change for review.")
+                Text("Your paired Mac can work with your Home from any screen. iOS may pause the connection in the background; opening the app resumes it.")
                 Text(bridge.status).font(.caption)
                 if bridge.running { Button("Disconnect") { bridge.stop() }.disabled(bridge.busy) }
-                else { Button("Connect Paired Mac") { bridge.start(store) } }
+                else {
+                    Toggle("Allow changes for this session", isOn: $allowChanges)
+                    Text("Requests run automatically while connected. This setting is remembered until you disconnect.").font(.caption)
+                    Button(allowChanges ? "Connect & Allow Changes" : "Connect Read Only") { bridge.start(store, allowChanges: allowChanges) }
+                }
             }
             if bridge.pending != nil {
-                Section("Proposed Change") {
+                Section("Applying Change") {
                     Text(bridge.preview).font(.callout).textSelection(.enabled)
                     Text("A configuration backup is saved before this change. Scenes can control physical accessories.").font(.caption)
-                    Button("Approve Change") { Task { await bridge.approve() } }.disabled(bridge.busy)
-                    Button("Decline", role: .cancel) { bridge.reject() }.disabled(bridge.busy)
                     if bridge.busy { ProgressView("Applying…") }
                 }
             }
+            else if !bridge.preview.isEmpty {
+                Section("Last Request") { Text(bridge.preview).font(.callout).textSelection(.enabled) }
+            }
         }
         .navigationTitle("Agent Access")
-        .onDisappear { bridge.stop() }
-        .onChange(of: phase) { _, next in if next != .active { bridge.stop() } }
     }
 }

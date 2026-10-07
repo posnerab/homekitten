@@ -1,11 +1,20 @@
 # HomeKitten paired-device bridge
 
-The installed iPhone app provides configuration reads and phone-approved HomeKit
-changes to a paired Mac through Xcode's device file service. The app must be in
-the foreground on **Agent Access**, with **Connect Paired Mac** enabled.
-Leaving the screen or backgrounding the app disconnects the session. No paid
-Apple Developer membership or additional utility is required for the iPhone app.
-An already approved operation may finish while the app is leaving the screen.
+The installed iPhone app provides configuration reads and automatic HomeKit
+changes to a paired Mac through Xcode's device file service. On **Agent Access**,
+enable **Allow changes for this session** and tap **Connect & Allow Changes**.
+This authorization is remembered across app launches until **Disconnect** is
+tapped. **Connect Read Only** provides inventory access without accepting writes.
+No paid Apple Developer membership or additional utility is required.
+
+The bridge is owned by the app, not the Agent Access screen: navigation does not
+disconnect it. When backgrounded, the app requests finite background execution
+time from iOS. When that expires, it publishes a disconnected snapshot and
+pauses. It resumes automatically on foreground return with a new session UUID
+and the remembered access mode. There is no promise of persistent background
+availability. The phone must be connected through the paired device service;
+USB is verified, wireless Xcode pairing is not yet verified. Locked-device
+restrictions can prevent Mac transfers even during background execution.
 
 ## Mac client
 
@@ -23,7 +32,9 @@ The client can also run as a standard stdio MCP server:
 python3 /path/to/homekitten/scripts/homekit_agent.py --device <phone-UDID> mcp
 ```
 
-Its tools are `home_inventory`, `home_change_propose`, and `home_change_result`.
+Its tools are `home_inventory`, `home_change_execute`, and `home_change_result`.
+The older `home_change_propose` call name remains accepted as an alias; it now
+executes automatically when the connection has write access.
 Use the returned UUIDs rather than names to target objects. Inventory values
 are explicitly marked as cached; a successful writable-characteristic operation
 attempts read-back if supported. A HomeKit completion callback is not proof of
@@ -59,17 +70,20 @@ Example request file, using UUIDs from inventory:
 }
 ```
 
-## Phone review and persistence
+## Connection authorization and persistence
 
 The Mac submits a request containing a unique transaction UUID and the current
 session UUID. HomeKitten validates object identity, writable permissions, scalar
-types, and numeric limits before displaying the preview. Tap **Approve Change**
-or **Decline** on the phone. Review expires after five minutes. If the preview
-changes before approval, the request fails and needs resubmission.
+types, and numeric limits before executing automatically in a connection with
+write access. No per-change approval is shown. Read-only and stale-session
+requests are rejected by the phone. The Mac client also refuses to submit a
+write if the current inventory reports `writesAllowed: false`. The phone shows
+the current or last request so the operation remains visible.
 
 Before applying a change, HomeKitten records that the transaction has been
 consumed, then saves a configuration backup. Replaying the same transaction
-does not apply it again. Multi-step HomeKit operations are not atomic; failures
+does not apply it again. A disconnected/background-expired session cannot start
+another operation; an already executing operation may finish. Multi-step HomeKit operations are not atomic; failures
 are reported as potentially partial, and existing backup/restore UI remains
 available. An interrupted `executing` result is indeterminate: inspect Home
 before submitting a new request.
@@ -83,8 +97,8 @@ copies automatically. Only trusted paired Macs should access the device.
 ## Verified and outstanding
 
 On October 6, 2026, signed iPhone and unsigned Catalyst builds passed, along with
-client protocol, freshness rejection, and request identity tests. Installation,
+client protocol, freshness rejection, read-only rejection, and request identity tests. Installation,
 launch, live inventory retrieval over the paired device file service, and
 rejection of a nonexistent accessory UUID were verified on a physical iPhone.
-Live approved writes are still to be verified against a user-selected accessory
+Live automatic writes are still to be verified against a user-selected accessory
 or scene; deployment itself makes no Home configuration changes.

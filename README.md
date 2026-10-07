@@ -39,16 +39,15 @@ the Shortcuts panel opens Apple's Shortcuts app instead.
 
 ## Agent access from a paired Mac
 
-On iPhone, open **Agent Access** and tap **Connect Paired Mac**. Keep that screen
-open and the phone unlocked. The Mac client uses Xcode's paired-device file
-service to read configuration and submit changes for review on the phone.
+On iPhone, open **Agent Access**, enable **Allow changes for this session**, and
+tap **Connect & Allow Changes** once. The Mac client uses Xcode's paired-device
+file service to read configuration and execute changes automatically.
+Access works from every screen and reconnects when the app opens until you tap
+**Disconnect**. iOS grants only limited background runtime; access pauses when
+that expires and resumes when the app returns. Device transfer may require the
+phone to be unlocked.
 No additional app, paid membership, LAN server, or bearer token is needed.
 See [USB agent usage](docs/USB_AGENT.md) for CLI and MCP setup.
 
-## Future Mac agent access
-
-The app is deliberately not an unauthenticated local HomeKit API. The planned
-agent bridge keeps HomeKitten as the signed, user-authorized HomeKit client and
-adds a separate local tool surface with explicit approval for every state
-changing request. See [the bridge design](docs/AGENT_BRIDGE.md) before enabling
-it; it includes the pairing, permissions, audit, and rollout requirements.
+The original [Mac bridge proposal](docs/AGENT_BRIDGE.md) is historical. The
+implemented iPhone design is documented in [USB agent usage](docs/USB_AGENT.md).

@@ -27,7 +27,7 @@ class AgentTests(unittest.TestCase):
         captured = []
         def transfer(direction, source, destination):
             captured.append((direction, json.loads(pathlib.Path(source).read_text()), destination))
-        with patch.object(client, "inventory", return_value={"sessionID": "live-session"}), patch.object(client, "transfer", side_effect=transfer):
+        with patch.object(client, "inventory", return_value={"sessionID": "live-session", "writesAllowed": True}), patch.object(client, "transfer", side_effect=transfer):
             result = client.submit({"operation": "rename_accessory", "homeID": str(uuid.uuid4()), "objectID": str(uuid.uuid4()), "name": "Test", "sessionID": "forged", "id": "forged"})
         request = captured[0][1]
         self.assertEqual(request["sessionID"], "live-session")
@@ -40,7 +40,14 @@ class AgentTests(unittest.TestCase):
         client = agent.Client("device")
         with self.assertRaises(ValueError):
             client.submit({"operation": "approve"})
-        self.assertEqual([t["name"] for t in agent.tool_definitions()], ["home_inventory", "home_change_propose", "home_change_result"])
+        self.assertEqual([t["name"] for t in agent.tool_definitions()], ["home_inventory", "home_change_execute", "home_change_result"])
+
+    def test_read_only_session_cannot_send_changes(self):
+        client = agent.Client("device")
+        with patch.object(client, "inventory", return_value={"sessionID": "read-only", "writesAllowed": False}), patch.object(client, "transfer") as transfer:
+            with self.assertRaises(RuntimeError):
+                client.submit({"operation": "rename_accessory", "homeID": str(uuid.uuid4()), "name": "Test"})
+            transfer.assert_not_called()
 
     def test_mcp_notifications_do_not_get_responses(self):
         source = io.StringIO('\n'.join([
