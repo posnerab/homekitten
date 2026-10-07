@@ -166,3 +166,30 @@ bridge-container data and must not be committed.
 Run `python3 -m unittest discover -s tests -v` to validate the client and the
 production Swift predicate serializer (Swift checks run on macOS). Validate event
 exports against a fresh signed-app inventory after installation.
+
+## Network access from Mini-Sefarim
+
+A trusted network client can run the same stdio MCP server over SSH to the Mac.
+`scripts/homekit_remote.py` forwards stdin/stdout without copying bridge files,
+creating an HTTP service, or changing HomeKit permissions. The existing Mac SSH
+account/key and known-host identity must already work. Password prompting and
+accepting unknown or changed host keys are disabled. Interrupted writes are not
+replayed; retrieve their transaction outcome and inspect state before retrying.
+
+Mini-Sefarim uses its existing `abie-mini` SSH alias and registers this launcher
+as `homekitten_network`. The workspace `.mcp.registry.json` holds its non-secret
+arguments. If `.local` name resolution fails, `--hostname` selects the Mac's LAN
+address while `--host-key-alias abie-mini.local` retains the trusted host identity.
+Update the address if the Mac's LAN lease changes; do not disable host checking.
+
+From Projects on Windows:
+
+```powershell
+smarthome/.venv/Scripts/python.exe smarthome/scripts/mcp/registry.py --server homekitten_network --apply
+```
+
+Verify MCP initialize, tools/list, and a fresh `home_inventory` call from the
+Windows host. Registration alone does not establish live access. Refresh MCP
+servers or restart Codex to load the connection in an existing chat. HomeKitten
+must stay running with Agent Access connected, and the Mac must stay awake.
+This path uses the installed signed Mac app; the phone/iPad is not needed.
