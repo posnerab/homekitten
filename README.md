@@ -4,6 +4,10 @@ iPhone, iPad, and Mac Catalyst HomeKit manager. It reads and controls HomeKit ac
 manages rooms, groups, scenes, automations, backups, and reassignment.
 The Mac version uses Mac Catalyst to access HomeKit.
 
+For agent work or a fresh-session handoff, start with [AGENTS.md](AGENTS.md).
+It records the current architecture, operating choices, build/install workflow,
+and the distinction between verified behavior and remaining live tests.
+
 ## Prerequisites
 
 1. Open `HomeKitten.xcodeproj` in Xcode.
