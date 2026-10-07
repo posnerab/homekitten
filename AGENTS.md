@@ -84,6 +84,7 @@ and now executes automatically when write access is enabled. Supported
 operations and exact request fields are documented in `docs/USB_AGENT.md`.
 
 - Accessory rename and writable scalar characteristic values.
+- Room creation and accessory assignment within the selected Home, with UUID validation and assignment read-back.
 - Scene creation, rename, action replacement, and execution.
 - Timer automation creation; existing automation rename, attached-scene
   replacement, and enabled-state updates.

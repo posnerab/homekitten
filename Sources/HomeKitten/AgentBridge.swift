@@ -40,6 +40,7 @@ struct AgentRequest: Codable, Identifiable, Sendable {
     let operation: String
     let homeID: UUID
     let objectID: UUID?
+    let roomID: UUID?
     let name: String?
     let value: AgentValue?
     let actions: [AgentAction]?
@@ -236,6 +237,14 @@ final class AgentBridge {
         let home = try resolveHome(r)
         var text = "\(r.operation) in \(home.name)\nHome: \(r.homeID)\n"
         switch r.operation {
+        case "create_room":
+            let name = try newName(r)
+            guard !home.rooms.contains(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame }) else { throw failure("Room name already exists") }
+            text += "Create room \(name)"
+        case "assign_accessory":
+            guard let accessory = home.accessories.first(where: { $0.uniqueIdentifier == r.objectID }) else { throw failure("Accessory UUID not found") }
+            guard let room = home.rooms.first(where: { $0.uniqueIdentifier == r.roomID }) else { throw failure("Room UUID not found in this Home") }
+            text += "Move \(accessory.name) from \(accessory.room?.name ?? "Default Room") to \(room.name) [\(room.uniqueIdentifier)]"
         case "rename_accessory":
             guard let a = home.accessories.first(where: { $0.uniqueIdentifier == r.objectID }) else { throw failure("Accessory UUID not found") }
             text += "Rename \(a.name) to \(try newName(r))"
@@ -298,6 +307,22 @@ final class AgentBridge {
 
     private func execute(_ r: AgentRequest, home: HMHome) async throws -> String {
         switch r.operation {
+        case "create_room":
+            let name = try newName(r)
+            let room: HMRoom = try await withCheckedThrowingContinuation { continuation in
+                home.addRoom(withName: name) { room, error in
+                    if let error { continuation.resume(throwing: error) }
+                    else if let room { continuation.resume(returning: room) }
+                    else { continuation.resume(throwing: self.failure("Room creation returned no room")) }
+                }
+            }
+            return "Room saved: \(room.uniqueIdentifier)"
+        case "assign_accessory":
+            guard let accessory = home.accessories.first(where: { $0.uniqueIdentifier == r.objectID }),
+                  let room = home.rooms.first(where: { $0.uniqueIdentifier == r.roomID }) else { throw failure("Accessory or room UUID not found in this Home") }
+            if accessory.room?.uniqueIdentifier != room.uniqueIdentifier { try await home.assignAccessory(accessory, to: room) }
+            guard accessory.room?.uniqueIdentifier == room.uniqueIdentifier else { throw failure("Room assignment read-back did not confirm the target") }
+            return "Accessory assigned to room: \(room.uniqueIdentifier)"
         case "rename_accessory":
             let a = home.accessories.first { $0.uniqueIdentifier == r.objectID }!
             try await a.updateName(newName(r))

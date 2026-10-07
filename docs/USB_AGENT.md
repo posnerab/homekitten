@@ -45,6 +45,8 @@ physical accessory behavior.
 | operation | Required fields beyond operation and homeID |
 | --- | --- |
 | rename_accessory | objectID (accessory UUID), name |
+| create_room | name (must be unique in the selected Home) |
+| assign_accessory | objectID (accessory UUID), roomID (destination room UUID in the same Home) |
 | set_characteristic | objectID (characteristic UUID), value (bool, number, string) |
 | create_scene | name, actions (characteristicID/value pairs) |
 | update_scene | objectID (scene UUID), actions; optional name |

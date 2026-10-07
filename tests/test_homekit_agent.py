@@ -107,6 +107,24 @@ class AgentTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     client.transfer("from", path, pathlib.Path(temp) / "output.json")
 
+    def test_room_operations_validate_uuid_and_use_authorized_session(self):
+        client = agent.Client("device")
+        home, accessory, room = [str(uuid.uuid4()) for _ in range(3)]
+        submitted = []
+        with patch.object(client, "inventory", return_value={"sessionID": "live", "writesAllowed": True}), patch.object(
+                client, "transfer", side_effect=lambda _, source, dest: submitted.append(json.loads(pathlib.Path(source).read_text()))):
+            client.submit({"operation": "create_room", "homeID": home, "name": "Wiz"})
+            client.submit({"operation": "assign_accessory", "homeID": home, "objectID": accessory, "roomID": room})
+            with self.assertRaises(ValueError):
+                client.submit({"operation": "assign_accessory", "homeID": home, "objectID": accessory, "roomID": "bad-room"})
+        self.assertEqual(len(submitted), 2)
+        self.assertEqual(submitted[1]["roomID"], room.upper())
+        self.assertEqual(submitted[1]["sessionID"], "live")
+        schema = agent.tool_definitions()[1]["inputSchema"]
+        self.assertIn("create_room", schema["properties"]["operation"]["enum"])
+        self.assertIn("assign_accessory", schema["properties"]["operation"]["enum"])
+        self.assertEqual(schema["properties"]["roomID"]["format"], "uuid")
+
 
 if __name__ == "__main__":
     unittest.main()

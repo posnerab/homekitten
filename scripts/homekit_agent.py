@@ -18,7 +18,7 @@ import uuid
 
 BUNDLE = "abie.ios.homekitten"
 OPERATIONS = ["rename_accessory", "set_characteristic", "create_scene", "update_scene",
-              "rename_scene", "run_scene", "create_timer", "update_automation"]
+              "rename_scene", "run_scene", "create_timer", "update_automation", "create_room", "assign_accessory"]
 
 
 class Client:
@@ -55,7 +55,7 @@ class Client:
         for key in ("id", "sessionID"):
             request.pop(key, None)
         request["homeID"] = str(uuid.UUID(request["homeID"])).upper()
-        for key in ("objectID",):
+        for key in ("objectID", "roomID"):
             if request.get(key):
                 request[key] = str(uuid.UUID(request[key])).upper()
         request["id"] = str(uuid.uuid4()).upper()
@@ -123,6 +123,7 @@ def tool_definitions():
                              "operation": {"type": "string", "enum": OPERATIONS},
                              "homeID": {"type": "string", "format": "uuid"},
                              "objectID": {"type": "string", "format": "uuid"},
+                             "roomID": {"type": "string", "format": "uuid", "description": "Destination room UUID for assign_accessory; must belong to the selected Home."},
                              "name": {"type": "string"},
                              "value": {"type": ["boolean", "number", "string"]},
                              "actions": {"type": "array", "items": {"type": "object", "required": ["characteristicID", "value"], "properties": {
