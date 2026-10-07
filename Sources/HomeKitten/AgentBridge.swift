@@ -59,6 +59,8 @@ final class AgentBridge {
     private(set) var busy = false
     private(set) var writesAllowed = false
     private var sessionID = UUID()
+    private var metadataReads = Set<UUID>()
+    private var metadataReadStatus = [String: String]()
     private var timer: Timer?
     private var store: HomeStore?
     private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
@@ -78,6 +80,8 @@ final class AgentBridge {
         UserDefaults.standard.set(true, forKey: "agentBridge.enabled")
         UserDefaults.standard.set(allowChanges, forKey: "agentBridge.allowChanges")
         sessionID = UUID()
+        metadataReads.removeAll()
+        metadataReadStatus.removeAll()
         writesAllowed = allowChanges
         do {
             for name in ["incoming", "responses", "backups"] {
@@ -133,6 +137,7 @@ final class AgentBridge {
     private func tick() {
         guard running, let store, store.isAuthorized else { stop(preserveConnection: true); return }
         do {
+            refreshAccessoryMetadata(store)
             try publish(store)
             guard pending == nil, !busy else { return }
             let files = try FileManager.default.contentsOfDirectory(at: directory.appendingPathComponent("incoming"), includingPropertiesForKeys: nil)
@@ -335,20 +340,50 @@ final class AgentBridge {
         return "HomeKit operation completed"
     }
 
+    // Read only identifying metadata once per connection; leave sensor values cached.
+    private func refreshAccessoryMetadata(_ store: HomeStore) {
+        let types = Set([HMCharacteristicTypeManufacturer, HMCharacteristicTypeModel,
+                         HMCharacteristicTypeSerialNumber, HMCharacteristicTypeFirmwareVersion,
+                         HMCharacteristicTypeHardwareVersion])
+        for home in store.homes {
+            for accessory in home.accessories {
+                for c in accessory.services.flatMap(\.characteristics)
+                    where types.contains(c.characteristicType) && c.properties.contains(HMCharacteristicPropertyReadable) {
+                    guard metadataReads.insert(c.uniqueIdentifier).inserted else { continue }
+                    let key = c.uniqueIdentifier.uuidString
+                    metadataReadStatus[key] = "pending"
+                    c.readValue { [weak self] error in
+                        Task { @MainActor in
+                            self?.metadataReadStatus[key] = error == nil ? "read" : "failed"
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     private func publish(_ store: HomeStore) throws {
         let homes: [[String: Any]] = store.homes.map { home in
+            let bridges = Dictionary(uniqueKeysWithValues: home.accessories.flatMap { bridge in
+                bridge.bridgedAccessories.map { ($0.uniqueIdentifier, bridge) }
+            })
             let accessories: [[String: Any]] = home.accessories.map { accessory in
                 let services: [[String: Any]] = accessory.services.map { service in
                     let characteristics: [[String: Any]] = service.characteristics.map { c in
                         ["id": c.uniqueIdentifier.uuidString, "name": c.localizedDescription,
                          "type": c.characteristicType, "properties": c.properties,
-                         "cachedValue": jsonValue(c.value), "format": c.metadata?.format ?? "",
+                         "cachedValue": jsonValue(c.value), "metadataReadStatus": metadataReadStatus[c.uniqueIdentifier.uuidString] ?? "not_requested", "format": c.metadata?.format ?? "",
                          "min": jsonValue(c.metadata?.minimumValue), "max": jsonValue(c.metadata?.maximumValue)]
                     }
                     return ["id": service.uniqueIdentifier.uuidString, "name": service.name, "type": service.serviceType, "characteristics": characteristics]
                 }
                 return ["id": accessory.uniqueIdentifier.uuidString, "name": accessory.name, "reachable": accessory.isReachable,
-                        "roomID": accessory.room?.uniqueIdentifier.uuidString ?? "", "services": services]
+                        "roomID": accessory.room?.uniqueIdentifier.uuidString ?? "", "services": services,
+                        "manufacturer": accessory.manufacturer ?? "", "model": accessory.model ?? "",
+                        "firmwareVersion": accessory.firmwareVersion ?? "",
+                        "categoryType": accessory.category.categoryType,
+                        "bridgeID": bridges[accessory.uniqueIdentifier]?.uniqueIdentifier.uuidString ?? "",
+                        "bridgeName": bridges[accessory.uniqueIdentifier]?.name ?? ""]
             }
             let scenes: [[String: Any]] = home.actionSets.map { scene in
                 let actions: [[String: Any]] = scene.actions.compactMap { action in
@@ -362,9 +397,13 @@ final class AgentBridge {
                  "kind": String(describing: type(of: trigger)), "sceneIDs": trigger.actionSets.map { $0.uniqueIdentifier.uuidString }]
             }
             let rooms: [[String: Any]] = home.rooms.map { ["id": $0.uniqueIdentifier.uuidString, "name": $0.name] }
+            let zones: [[String: Any]] = home.zones.map {
+                ["id": $0.uniqueIdentifier.uuidString, "name": $0.name,
+                 "roomIDs": $0.rooms.map { $0.uniqueIdentifier.uuidString }]
+            }
             let groups: [[String: Any]] = home.serviceGroups.map { ["id": $0.uniqueIdentifier.uuidString, "name": $0.name, "serviceIDs": $0.services.map { $0.uniqueIdentifier.uuidString }] }
             return ["id": home.uniqueIdentifier.uuidString, "name": home.name, "rooms": rooms, "groups": groups,
-                    "accessories": accessories, "scenes": scenes, "automations": automations]
+                    "zones": zones, "accessories": accessories, "scenes": scenes, "automations": automations]
         }
         try write(["version": 2, "active": true, "writesAllowed": writesAllowed, "capturedAt": isoNow(), "sessionID": sessionID.uuidString,
                    "valuesAreCached": true, "homes": homes], to: "inventory.json")

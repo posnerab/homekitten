@@ -102,3 +102,16 @@ launch, live inventory retrieval over the paired device file service, and
 rejection of a nonexistent accessory UUID were verified on a physical iPhone.
 Live automatic writes are still to be verified against a user-selected accessory
 or scene; deployment itself makes no Home configuration changes.
+
+## Accessory metadata
+
+Inventory includes HomeKit manufacturer, model, firmware version, category and
+bridge identity. Manufacturer/model/serial/firmware/hardware characteristics are
+read once per connection, with `metadataReadStatus` (`pending`, `read`, `failed`,
+or `not_requested`) per characteristic. Other values remain cached. Unsupported
+or unavailable metadata stays empty; accessory firmware is also exposed directly
+from HomeKit, since its characteristic value may remain unavailable.
+
+Inventory also exports HomeKit zones with room UUID membership. Service groups
+retain their service UUIDs; clients can resolve accessory membership without
+matching display names.
