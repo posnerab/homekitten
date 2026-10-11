@@ -197,8 +197,16 @@ On October 6, 2026, signed iPhone and unsigned Catalyst builds passed, along wit
 client protocol, freshness rejection, read-only rejection, and request identity tests. Installation,
 launch, live inventory retrieval over the paired device file service, and
 rejection of a nonexistent accessory UUID were verified on a physical iPhone.
-Live automatic writes are still to be verified against a user-selected accessory
-or scene; deployment itself makes no Home configuration changes.
+That initial deployment made no Home configuration changes.
+
+On October 10, 2026, the signed Mac Catalyst update was installed with the
+registered Apple Development certificate; signed iOS and unsigned Catalyst
+builds and all 18 client/serializer tests passed. A fresh stdio MCP session
+verified `automationWritesVersion: 1`, created the requested Sonos scenes and
+guarded exit automation, and updated the existing entry automation. Independent
+inventory confirmed both triggers were enabled and active, all scene actions,
+and the both-modes-off predicate. Full physical mode transitions were not
+performed because the existing entry rule also operates appliances and lights.
 
 ## Accessory metadata
 
