@@ -55,7 +55,7 @@ class AgentTests(unittest.TestCase):
         client = agent.Client("device")
         with self.assertRaises(ValueError):
             client.submit({"operation": "approve"})
-        self.assertEqual([t["name"] for t in agent.tool_definitions()], ["home_inventory", "home_change_execute", "home_change_result"])
+        self.assertEqual([t["name"] for t in agent.tool_definitions()], ["home_inventory", "home_change_execute", "home_change_result", "home_read_characteristics", "home_read_result"])
 
     def test_read_only_session_cannot_send_changes(self):
         client = agent.Client("device")
@@ -124,6 +124,59 @@ class AgentTests(unittest.TestCase):
         self.assertIn("create_room", schema["properties"]["operation"]["enum"])
         self.assertIn("assign_accessory", schema["properties"]["operation"]["enum"])
         self.assertEqual(schema["properties"]["roomID"]["format"], "uuid")
+
+    def test_live_read_works_read_only_and_uses_separate_queue(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = pathlib.Path(temp)
+            (root / "reads").mkdir()
+            record = {"active": True, "writesAllowed": False, "liveReadsSupported": True,
+                      "sessionID": "actual-session", "capturedAt": datetime.datetime.now(datetime.timezone.utc).isoformat()}
+            (root / "inventory.json").write_text(json.dumps(record))
+            client = agent.LocalClient(root)
+            home, characteristic = [str(uuid.uuid4()) for _ in range(2)]
+            completed = {"state": "completed", "results": [{"state": "read", "value": False, "readAt": "2026-10-11T02:00:00Z"}]}
+            with patch.object(client, "read_result", side_effect=[{"state": "executing"}, completed]), patch.object(agent.time, "sleep"):
+                result = client.live_read({"homeID": home, "characteristicIDs": [characteristic], "id": "forged", "sessionID": "forged"})
+            self.assertEqual(result, completed)
+            files = list((root / "reads").glob("*.json"))
+            self.assertEqual(len(files), 1)
+            request = json.loads(files[0].read_text())
+            self.assertEqual(request["sessionID"], "actual-session")
+            self.assertEqual(request["homeID"], home.upper())
+            self.assertEqual(request["characteristicIDs"], [characteristic.upper()])
+            self.assertNotIn("operation", request)
+            uuid.UUID(request["id"])
+
+    def test_live_read_validation_and_older_app_do_not_submit(self):
+        client = agent.Client("device")
+        home, characteristic = [str(uuid.uuid4()) for _ in range(2)]
+        with patch.object(client, "inventory", return_value={"liveReadsSupported": False}), patch.object(client, "transfer") as transfer:
+            for ids in ([], [characteristic] * 2, [str(uuid.uuid4()) for _ in range(11)], ["bad-uuid"]):
+                with self.assertRaises(ValueError):
+                    client.live_read({"homeID": home, "characteristicIDs": ids})
+            with self.assertRaises(RuntimeError):
+                client.live_read({"homeID": home, "characteristicIDs": [characteristic]})
+            transfer.assert_not_called()
+
+    def test_live_read_wait_timeout_keeps_request_retrievable(self):
+        client = agent.Client("device")
+        pending = {"id": str(uuid.uuid4()), "state": "executing"}
+        with patch.object(client, "inventory", return_value={"sessionID": "actual-session", "liveReadsSupported": True}), patch.object(client, "transfer"), patch.object(client, "read_result", return_value=pending), patch.object(agent.time, "monotonic", side_effect=[0, 41]):
+            result = client.live_read({"homeID": str(uuid.uuid4()), "characteristicIDs": [str(uuid.uuid4())]})
+        self.assertEqual(result, pending)
+
+    def test_mcp_live_read_preserves_partial_failure_without_cached_fallback(self):
+        client = agent.Client("device")
+        result = {"state": "completed", "results": [{"state": "read", "value": True, "readAt": "now"},
+                                                     {"state": "failed", "error": "HomeKit read timed out after 3 seconds"}]}
+        with patch.object(client, "live_read", return_value=result):
+            response = agent.dispatch(client, "tools/call", {"name": "home_read_characteristics", "arguments": {}})
+        self.assertEqual(json.loads(response["content"][0]["text"]), result)
+        self.assertNotIn("value", result["results"][1])
+        with patch.object(client, "read_result", return_value=result) as read_result:
+            response = agent.dispatch(client, "tools/call", {"name": "home_read_result", "arguments": {"id": "saved-request"}})
+            read_result.assert_called_once_with("saved-request")
+            self.assertEqual(json.loads(response["content"][0]["text"]), result)
 
 
 if __name__ == "__main__":

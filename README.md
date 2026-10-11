@@ -93,3 +93,11 @@ the bridge available. Quit or sleep prevents access; stale snapshots are
 rejected. Existing session authorization, backups and transaction safeguards
 apply to both transports. Paid membership does not remove iPadOS background
 suspension. TestFlight/App Store distribution remains a separate release.
+
+### Fresh state queries through MCP
+
+Use `home_read_characteristics` to read selected light/switch or sensor
+characteristics from HomeKit on demand, with per-value timestamps and explicit
+errors/timeouts. It also works in read-only connections. `home_inventory` keeps
+its fast cached behavior. See [live read usage](docs/USB_AGENT.md#live-characteristic-reads)
+for limits and request-result retrieval.

@@ -2,6 +2,7 @@
 """HomeKitten paired-device and local Mac client. No dependencies, network service, or secrets.
 
 CLI: (--device UDID | --local-bridge DIR) inventory | submit request.json | result UUID | mcp
+Fresh reads: read request.json | read-result UUID
 MCP uses newline-delimited JSON-RPC on stdin/stdout. Device diagnostics never
 appear on protocol stdout. The app grants write access for its remembered connection.
 """
@@ -14,6 +15,7 @@ import pathlib
 import subprocess
 import sys
 import tempfile
+import time
 import uuid
 
 BUNDLE = "abie.ios.homekitten"
@@ -80,6 +82,37 @@ class Client:
         except RuntimeError:
             raise RuntimeError("Request is queued or device is unavailable; retry result retrieval")
 
+    def read_result(self, transaction):
+        transaction = str(uuid.UUID(transaction)).upper()
+        try:
+            return self.read("read-responses/" + transaction + ".json")
+        except RuntimeError:
+            return {"id": transaction, "state": "queued", "message": "Retry home_read_result with this id; the app has not returned an outcome."}
+
+    def live_read(self, arguments):
+        home = str(uuid.UUID(arguments["homeID"])).upper()
+        ids = arguments["characteristicIDs"]
+        if not isinstance(ids, list) or not 1 <= len(ids) <= 10:
+            raise ValueError("Provide 1–10 characteristic UUIDs")
+        ids = [str(uuid.UUID(item)).upper() for item in ids]
+        if len(set(ids)) != len(ids):
+            raise ValueError("Duplicate characteristic UUIDs")
+        inventory = self.inventory()
+        if not inventory.get("liveReadsSupported"):
+            raise RuntimeError("This app build does not support live reads; install the updated HomeKitten app.")
+        request = {"id": str(uuid.uuid4()).upper(), "sessionID": inventory["sessionID"],
+                   "homeID": home, "characteristicIDs": ids}
+        with tempfile.TemporaryDirectory(prefix="homekitten-read-") as temp:
+            incoming = pathlib.Path(temp) / (request["id"] + ".json")
+            incoming.write_text(json.dumps(request))
+            self.transfer("to", incoming, "Documents/AgentBridge/reads/" + incoming.name)
+        deadline = time.monotonic() + 40
+        while True:
+            result = self.read_result(request["id"])
+            if result.get("state") not in ("queued", "executing") or time.monotonic() >= deadline:
+                return result
+            time.sleep(0.5)
+
 
 class LocalClient(Client):
     """Use the running signed Mac app's private bridge directory."""
@@ -134,14 +167,24 @@ def tool_definitions():
                              "recurrenceMinutes": {"type": "integer", "minimum": 1, "maximum": 525600},
                              "enabled": {"type": "boolean"}}}},
         {"name": "home_change_result", "description": "Read execution outcome by transaction UUID.",
-         "inputSchema": {"type": "object", "required": ["id"], "properties": {"id": {"type": "string", "format": "uuid"}}, "additionalProperties": False}}
+         "inputSchema": {"type": "object", "required": ["id"], "properties": {"id": {"type": "string", "format": "uuid"}}, "additionalProperties": False}},
+        {"name": "home_read_characteristics", "description": "Request fresh HomeKit reads for 1–10 characteristic UUIDs in one Home. Works in read-only sessions. Returns per-characteristic values and readAt timestamps, or explicit errors/timeouts without cached fallback. Homebridge plugin/device freshness can vary. A queued/executing response can be retrieved with home_read_result.",
+         "annotations": {"readOnlyHint": True},
+         "inputSchema": {"type": "object", "required": ["homeID", "characteristicIDs"], "additionalProperties": False,
+                         "properties": {"homeID": {"type": "string", "format": "uuid"},
+                                        "characteristicIDs": {"type": "array", "minItems": 1, "maxItems": 10, "uniqueItems": True,
+                                                              "items": {"type": "string", "format": "uuid"}}}}},
+        {"name": "home_read_result", "description": "Retrieve a queued or executing live-read request by id without submitting another request.",
+         "annotations": {"readOnlyHint": True},
+         "inputSchema": {"type": "object", "required": ["id"], "additionalProperties": False,
+                         "properties": {"id": {"type": "string", "format": "uuid"}}}}
     ]
 
 
 def dispatch(client, method, params):
     if method == "initialize":
         return {"protocolVersion": params.get("protocolVersion", "2024-11-05"),
-                "capabilities": {"tools": {}}, "serverInfo": {"name": "homekitten-usb", "version": "1.0.0"}}
+                "capabilities": {"tools": {}}, "serverInfo": {"name": "homekitten-usb", "version": "1.1.0"}}
     if method == "ping":
         return {}
     if method == "tools/list":
@@ -156,6 +199,10 @@ def dispatch(client, method, params):
                 result = client.submit(args)
             elif name == "home_change_result":
                 result = client.result(args["id"])
+            elif name == "home_read_characteristics":
+                result = client.live_read(args)
+            elif name == "home_read_result":
+                result = client.read_result(args["id"])
             else:
                 raise ValueError("Unknown tool")
             return {"content": [{"type": "text", "text": json.dumps(result)}]}
@@ -189,6 +236,8 @@ def main():
     commands.add_parser("mcp")
     commands.add_parser("submit").add_argument("request", type=pathlib.Path)
     commands.add_parser("result").add_argument("id")
+    commands.add_parser("read").add_argument("request", type=pathlib.Path)
+    commands.add_parser("read-result").add_argument("id")
     args = parser.parse_args()
     client = LocalClient(args.local_bridge) if args.local_bridge else Client(args.device)
     if args.command == "mcp":
@@ -199,6 +248,10 @@ def main():
             result = client.inventory()
         elif args.command == "submit":
             result = client.submit(json.loads(args.request.read_text()))
+        elif args.command == "read":
+            result = client.live_read(json.loads(args.request.read_text()))
+        elif args.command == "read-result":
+            result = client.read_result(args.id)
         else:
             result = client.result(args.id)
         print(json.dumps(result, indent=2))

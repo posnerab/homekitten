@@ -40,6 +40,39 @@ are explicitly marked as cached; a successful writable-characteristic operation
 attempts read-back if supported. A HomeKit completion callback is not proof of
 physical accessory behavior.
 
+## Live characteristic reads
+
+`home_read_characteristics` requests fresh HomeKit reads for 1–10 unique
+`characteristicIDs` in a specified `homeID`, using UUIDs from inventory.
+`home_inventory` remains a fast cached snapshot. Successful entries return
+`state: "read"`, `value`, and `readAt`. Failed entries return an error and no
+value, including when the three-second per-characteristic timeout expires.
+Mixed success and failure preserve each individual outcome; there is no cached
+fallback. Responses identify their source as `homekit_read`.
+
+The tool waits up to 40 seconds. If a request remains `queued` or `executing`,
+retrieve it with `home_read_result` and the returned `id` rather than submitting
+another read. Queued requests can wait behind another read. App interruption
+can leave an executing result; a new read cannot change an accessory.
+
+Reads work in active read-only sessions and sessions with changes allowed.
+They use separate `reads/` and `read-responses/` queues, validate the current
+session and Home/characteristic UUIDs, and never enter the write executor or
+create configuration backups. The signed Mac app must be running, or the
+paired iOS app must be available. Homebridge freshness depends on the plugin's
+read implementation; a HomeKit read is not independent physical confirmation.
+
+The CLI accepts a local request JSON containing `homeID` and
+`characteristicIDs`:
+
+```sh
+python3 scripts/homekit_agent.py --local-bridge ~/Documents/AgentBridge read request.json
+python3 scripts/homekit_agent.py --local-bridge ~/Documents/AgentBridge read-result <request-UUID>
+```
+
+Keep requests and outcomes local. Reconnect existing MCP clients after updating
+the Python client so they discover the new tools.
+
 ## Supported requests
 
 | operation | Required fields beyond operation and homeID |

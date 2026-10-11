@@ -50,6 +50,24 @@ struct AgentRequest: Codable, Identifiable, Sendable {
     let enabled: Bool?
 }
 
+struct AgentReadRequest: Codable, Sendable {
+    let id: UUID
+    let sessionID: UUID
+    let homeID: UUID
+    let characteristicIDs: [UUID]
+}
+
+@MainActor
+private final class AgentReadCompletion {
+    private var continuation: CheckedContinuation<String?, Never>?
+    init(_ continuation: CheckedContinuation<String?, Never>) { self.continuation = continuation }
+    func finish(error: String?) {
+        guard let continuation else { return }
+        self.continuation = nil
+        continuation.resume(returning: error)
+    }
+}
+
 @MainActor
 @Observable
 final class AgentBridge {
@@ -63,6 +81,7 @@ final class AgentBridge {
     private var metadataReads = Set<UUID>()
     private var metadataReadStatus = [String: String]()
     private var timer: Timer?
+    private var reading = false
     private var store: HomeStore?
     private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
     private var wantsConnection = UserDefaults.standard.bool(forKey: "agentBridge.enabled")
@@ -85,7 +104,7 @@ final class AgentBridge {
         metadataReadStatus.removeAll()
         writesAllowed = allowChanges
         do {
-            for name in ["incoming", "responses", "backups"] {
+            for name in ["incoming", "responses", "backups", "reads", "read-responses"] {
                 try FileManager.default.createDirectory(at: directory.appendingPathComponent(name), withIntermediateDirectories: true)
             }
             running = true
@@ -145,6 +164,7 @@ final class AgentBridge {
         do {
             refreshAccessoryMetadata(store)
             try publish(store)
+            processReads()
             guard pending == nil, !busy else { return }
             let files = try FileManager.default.contentsOfDirectory(at: directory.appendingPathComponent("incoming"), includingPropertiesForKeys: nil)
                 .filter { $0.pathExtension == "json" && !FileManager.default.fileExists(atPath: directory.appendingPathComponent("responses/\($0.lastPathComponent)").path) }
@@ -197,6 +217,71 @@ final class AgentBridge {
     private func resolveHome(_ r: AgentRequest) throws -> HMHome {
         guard let home = store?.homes.first(where: { $0.uniqueIdentifier == r.homeID }) else { throw failure("Home UUID not found") }
         return home
+    }
+
+    // Read requests have a separate queue and never enter the write/backup path.
+    private func processReads() {
+        guard !reading else { return }
+        do {
+            let files = try FileManager.default.contentsOfDirectory(at: directory.appendingPathComponent("reads"), includingPropertiesForKeys: nil)
+                .filter { $0.pathExtension == "json" && !FileManager.default.fileExists(atPath: directory.appendingPathComponent("read-responses/\($0.lastPathComponent)").path) }
+                .sorted { $0.lastPathComponent < $1.lastPathComponent }
+            for file in files.prefix(100) {
+                guard let data = try? Data(contentsOf: file), data.count <= 65536,
+                      let request = try? JSONDecoder().decode(AgentReadRequest.self, from: data),
+                      file.lastPathComponent == "\(request.id.uuidString).json" else { continue }
+                reading = true
+                Task { await performRead(request) }
+                break
+            }
+        } catch { status = "Could not read live-read queue: \(error.localizedDescription)" }
+    }
+
+    private func performRead(_ request: AgentReadRequest) async {
+        defer { reading = false }
+        let path = "read-responses/\(request.id.uuidString).json"
+        do {
+            guard running, request.sessionID == sessionID, let store, store.isAuthorized else { throw failure("Stale or disconnected session; read inventory again") }
+            guard (1...10).contains(request.characteristicIDs.count), Set(request.characteristicIDs).count == request.characteristicIDs.count else { throw failure("Provide 1–10 unique characteristic UUIDs") }
+            guard let home = store.homes.first(where: { $0.uniqueIdentifier == request.homeID }) else { throw failure("Home UUID not found") }
+            try write(["id": request.id.uuidString, "state": "executing", "updatedAt": isoNow()], to: path)
+            var results = [[String: Any]]()
+            for id in request.characteristicIDs {
+                guard running, request.sessionID == sessionID else { throw failure("Session closed during live read") }
+                guard let c = home.accessories.flatMap(\.services).flatMap(\.characteristics).first(where: { $0.uniqueIdentifier == id }),
+                      c.properties.contains(HMCharacteristicPropertyReadable) else {
+                    results.append(["characteristicID": id.uuidString, "state": "failed", "error": "Readable characteristic UUID not found in this Home"])
+                    continue
+                }
+                results.append(await readCurrentValue(c))
+            }
+            guard running, request.sessionID == sessionID else { throw failure("Session closed during live read") }
+            try write(["id": request.id.uuidString, "state": "completed", "homeID": home.uniqueIdentifier.uuidString,
+                       "source": "homekit_read", "results": results, "updatedAt": isoNow()], to: path)
+            try publish(store)
+        } catch {
+            try? write(["id": request.id.uuidString, "state": "failed", "error": error.localizedDescription, "updatedAt": isoNow()], to: path)
+        }
+    }
+
+    private func readCurrentValue(_ characteristic: HMCharacteristic) async -> [String: Any] {
+        let error: String? = await withCheckedContinuation { continuation in
+            let completion = AgentReadCompletion(continuation)
+            Task { @MainActor in
+                try? await Task.sleep(for: .seconds(3))
+                completion.finish(error: "HomeKit read timed out after 3 seconds")
+            }
+            characteristic.readValue { error in
+                Task { @MainActor in
+                    completion.finish(error: error?.localizedDescription)
+                }
+            }
+        }
+        if let error {
+            return ["characteristicID": characteristic.uniqueIdentifier.uuidString, "state": "failed", "error": error]
+        }
+        return ["characteristicID": characteristic.uniqueIdentifier.uuidString, "state": "read",
+                "value": jsonValue(characteristic.value), "readAt": isoNow()]
     }
     private func characteristic(_ id: UUID?, in home: HMHome) throws -> HMCharacteristic {
         guard let id, let c = home.accessories.flatMap(\.services).flatMap(\.characteristics).first(where: { $0.uniqueIdentifier == id }),
@@ -433,6 +518,7 @@ final class AgentBridge {
                     "zones": zones, "accessories": accessories, "scenes": scenes, "automations": automations]
         }
         try write(["version": 2, "active": true, "writesAllowed": writesAllowed, "capturedAt": isoNow(), "sessionID": sessionID.uuidString,
+                   "liveReadsSupported": true,
                    "automationRulesVersion": 1, "automationRulesSource": "HomeKit public API",
                    "valuesAreCached": true, "homes": homes], to: "inventory.json")
     }

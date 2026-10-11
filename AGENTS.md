@@ -78,8 +78,11 @@ optional stdio tool server.
 
 ## Scope of the bridge
 
-The current tools are `home_inventory`, `home_change_execute`, and
-`home_change_result`. The old `home_change_propose` name is accepted as an alias
+The current tools are `home_inventory`, `home_change_execute`,
+`home_change_result`, `home_read_characteristics`, and `home_read_result`.
+Live reads use separate queues and work in read-only sessions. They return
+per-characteristic timestamps or errors/timeouts, never a cached fallback.
+The old `home_change_propose` name is accepted as an alias
 and now executes automatically when write access is enabled. Supported
 operations and exact request fields are documented in `docs/USB_AGENT.md`.
 
