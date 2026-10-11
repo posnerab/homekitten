@@ -37,6 +37,54 @@ class AgentTests(unittest.TestCase):
         self.assertTrue(captured[0][2].endswith(request["id"] + ".json"))
         self.assertEqual(result["state"], "submitted")
 
+    def test_deletion_requires_capability_and_write_authorization(self):
+        client = agent.Client("device")
+        for operation in ("delete_scene", "delete_automation"):
+            request = {"operation": operation, "homeID": str(uuid.uuid4()), "objectID": str(uuid.uuid4())}
+            for inventory in ({"writesAllowed": False, "deletionWritesVersion": 1}, {"writesAllowed": True}):
+                with patch.object(client, "inventory", return_value=inventory), patch.object(client, "transfer") as transfer:
+                    with self.assertRaises(RuntimeError):
+                        client.submit(request)
+                    transfer.assert_not_called()
+
+    def test_deletion_requires_target_and_rejects_other_change_fields(self):
+        client = agent.Client("device")
+        for operation in ("delete_scene", "delete_automation"):
+            base = {"operation": operation, "homeID": str(uuid.uuid4())}
+            requests = [base, dict(base, objectID="invalid")]
+            target = dict(base, objectID=str(uuid.uuid4()))
+            requests += [dict(target, **{field: value}) for field, value in
+                         (("name", "other"), ("sceneIDs", []), ("enabled", False), ("events", []), ("roomID", str(uuid.uuid4()))) ]
+            with patch.object(client, "inventory") as inventory, patch.object(client, "transfer") as transfer:
+                for request in requests:
+                    with self.assertRaises(ValueError):
+                        client.submit(request)
+                inventory.assert_not_called()
+                transfer.assert_not_called()
+
+    def test_mcp_deletion_uses_live_session_and_unique_transactions(self):
+        client = agent.Client("device")
+        home, target = str(uuid.uuid4()), str(uuid.uuid4())
+        messages = [{"jsonrpc": "2.0", "id": index, "method": "tools/call", "params": {
+            "name": "home_change_execute", "arguments": {"operation": operation, "homeID": home,
+            "objectID": target, "sessionID": "forged", "id": "forged"}}}
+            for index, operation in enumerate(("delete_scene", "delete_automation"), 1)]
+        output, requests = io.StringIO(), []
+        with patch.object(client, "inventory", return_value={"sessionID": "actual", "writesAllowed": True, "deletionWritesVersion": 1}), patch.object(
+                client, "transfer", side_effect=lambda _, source, dest: requests.append(json.loads(pathlib.Path(source).read_text()))):
+            agent.serve(client, io.StringIO("\n".join(map(json.dumps, messages)) + "\n"), output)
+        self.assertEqual(len(requests), 2)
+        self.assertNotEqual(requests[0]["id"], requests[1]["id"])
+        for request in requests:
+            self.assertEqual(request["sessionID"], "actual")
+            self.assertEqual(request["homeID"], home.upper())
+            self.assertEqual(request["objectID"], target.upper())
+        for line in output.getvalue().splitlines():
+            self.assertEqual(json.loads(json.loads(line)["result"]["content"][0]["text"])["state"], "submitted")
+        schema = next(t for t in agent.tool_definitions() if t["name"] == "home_change_execute")["inputSchema"]
+        self.assertIn("delete_scene", schema["properties"]["operation"]["enum"])
+        self.assertIn("delete_automation", schema["properties"]["operation"]["enum"])
+
     def test_mcp_inventory_preserves_automation_rules(self):
         record = {"automationRulesVersion": 1, "homes": [{"automations": [{
             "events": [{"kind": "HMSignificantTimeEvent", "offset": {"minute": -18}}],

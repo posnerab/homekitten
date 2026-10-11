@@ -112,3 +112,11 @@ Writes retain session authorization, automatic backups and single-consumption
 transactions. New automations default to disabled; updates disable during editing
 and re-enable only after success. Reconnect MCP clients after installing the
 updated signed app to discover the new schema.
+
+Scene and automation detail screens support Delete. MCP exposes `delete_scene`
+and `delete_automation` through `home_change_execute` when the app advertises
+`deletionWritesVersion: 1`; reconnect MCP after updating to discover them. Both
+routes back up first and check that the target disappeared. Referenced or
+HomeKit-owned scenes are blocked; automation deletion keeps shared scenes and removes automation-owned actions.
+Deletion is permanent; rule snapshots cannot automatically restore every event
+rule. See [operation safeguards](docs/USB_AGENT.md).

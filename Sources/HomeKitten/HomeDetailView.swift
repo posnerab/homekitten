@@ -553,6 +553,9 @@ struct CharacteristicDetailView: View {
 struct SceneDetailView: View {
     let home: HMHome
     let scene: HMActionSet
+    @Environment(\.dismiss) private var dismiss
+    @State private var confirmingDeletion = false
+    @State private var deleting = false
     @State private var status = ""
     @State private var showingAddAction = false
     @State private var editedName = ""
@@ -598,13 +601,38 @@ struct SceneDetailView: View {
                     NavigationLink(trigger.name) { AutomationDetailView(home: home, trigger: trigger) }
                 }
             }
+            Section {
+                Button("Delete Scene", role: .destructive) { confirmingDeletion = true }
+                    .disabled(deleting || HomeDeletion.sceneBlockReason(scene, in: home) != nil)
+                if let reason = HomeDeletion.sceneBlockReason(scene, in: home) {
+                    Text(reason).font(.footnote).foregroundStyle(.secondary)
+                }
+            }
         }
         .navigationTitle(scene.name)
         .homeKittenBackButton()
+        .disabled(deleting)
+        .alert("Delete Scene?", isPresented: $confirmingDeletion) {
+            Button("Delete", role: .destructive) { deleteItem() }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("Delete \(scene.name) permanently? " + "A backup is saved first; deletion cannot be undone automatically.")
+        }
         .sheet(isPresented: $showingAddAction) {
             NavigationStack { AddSceneActionView(home: home, scene: scene) }
         }
         .onAppear { if editedName.isEmpty { editedName = scene.name } }
+    }
+
+    private func deleteItem() {
+        deleting = true
+        Task { @MainActor in
+            do {
+                try await HomeDeletion.deleteScene(scene, in: home)
+                dismiss()
+            } catch { status = error.localizedDescription }
+            deleting = false
+        }
     }
 
     private var groupedActions: [SceneLogicalGroup] {
@@ -871,6 +899,9 @@ struct AutomationDetailView: View {
     let home: HMHome
     let trigger: HMTrigger
     @State private var enabled: Bool
+    @Environment(\.dismiss) private var dismiss
+    @State private var confirmingDeletion = false
+    @State private var deleting = false
     @State private var status = ""
     @State private var fireDate: Date
     @State private var recurrenceMinutes = ""
@@ -959,9 +990,20 @@ struct AutomationDetailView: View {
                     Button("Save Turn-Off Duration") { saveDuration(event) }
                 }
             }
+            Section {
+                Button("Delete Automation", role: .destructive) { confirmingDeletion = true }
+                    .disabled(deleting)
+            }
         }
         .navigationTitle(trigger.name)
         .homeKittenBackButton()
+        .disabled(deleting)
+        .alert("Delete Automation?", isPresented: $confirmingDeletion) {
+            Button("Delete", role: .destructive) { deleteItem() }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("Delete \(trigger.name) permanently? " + "Shared scenes will be kept; automation-owned actions are removed. A backup is saved first; deletion cannot be undone automatically.")
+        }
         .sheet(isPresented: $showingEventEditor) {
             NavigationStack { AutomationEventEditor(home: home, trigger: trigger as? HMEventTrigger) }
         }
@@ -970,6 +1012,17 @@ struct AutomationDetailView: View {
         }
         .sheet(isPresented: $showingScenePicker) {
             NavigationStack { AutomationScenePicker(home: home, trigger: trigger) }
+        }
+    }
+
+    private func deleteItem() {
+        deleting = true
+        Task { @MainActor in
+            do {
+                try await HomeDeletion.deleteAutomation(trigger, in: home)
+                dismiss()
+            } catch { status = error.localizedDescription }
+            deleting = false
         }
     }
 

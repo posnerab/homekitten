@@ -85,6 +85,8 @@ the Python client so they discover the new tools.
 | update_scene | objectID (scene UUID), actions; optional name |
 | rename_scene | objectID (scene UUID), name |
 | run_scene | objectID (scene UUID) |
+| delete_scene | objectID (unreferenced, user-defined scene UUID); no other change fields |
+| delete_automation | objectID (trigger UUID); no other change fields; shared scenes retained |
 | create_timer | name, future fireDate (ISO 8601 UTC), sceneIDs; optional recurrenceMinutes and enabled |
 | create_event_automation | name, events, sceneIDs; optional enabled, endEvents, conditions, recurrenceWeekdays, executeOnce |
 | update_automation | objectID (trigger UUID); name, sceneIDs, enabled, or event rule fields |
@@ -97,7 +99,17 @@ is the last step. Rule updates disable an enabled trigger first, then restore it
 prior enabled state (or the requested `enabled`) after all edits succeed. A partial
 failure can leave the trigger disabled; inspect its transaction and inventory
 before retrying. Rules on timer/unsupported trigger types are rejected.
-Pairing and deletion remain unavailable.
+Scene and automation deletion require `deletionWritesVersion: 1`. Deletion is
+permanent: a scene referenced by any automation (even disabled) or owned by
+HomeKit is rejected. Automation deletion retains shared user-defined scenes;
+HomeKit-owned actions belong to the deleted automation and may be removed by HomeKit. Remove references explicitly first. The app's
+scene and automation detail screens expose Delete with a confirmation; MCP uses
+the existing authorized session without another approval. Both routes save a Home
+backup and public-API automation-rule snapshot before deletion and verify absence
+after the callback. Rule snapshots are evidence, not automatic event-rule recovery.
+A failed or interrupted deletion must be inspected before retrying. Existing MCP
+connections must reconnect to discover the new operation enum. Pairing and
+accessory/room/Home/user deletion remain unavailable.
 
 ### Event automation writes
 

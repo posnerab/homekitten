@@ -429,8 +429,22 @@ final class AgentBridge {
 
     private func describe(_ r: AgentRequest) throws -> String {
         let home = try resolveHome(r)
+        if r.operation == "delete_scene" || r.operation == "delete_automation" {
+            guard r.objectID != nil, r.roomID == nil, r.name == nil, r.value == nil,
+                  r.actions == nil, r.sceneIDs == nil, r.fireDate == nil, r.recurrenceMinutes == nil,
+                  r.enabled == nil, !r.changesEventRules else {
+                throw failure("Deletion requires objectID and no other change fields")
+            }
+        }
         var text = "\(r.operation) in \(home.name)\nHome: \(r.homeID)\n"
         switch r.operation {
+        case "delete_scene":
+            let target = try scene(r.objectID, in: home)
+            if let reason = HomeDeletion.sceneBlockReason(target, in: home) { throw failure(reason) }
+            text += "Permanently delete scene \(target.name) with \(target.actions.count) actions"
+        case "delete_automation":
+            let target = try trigger(r.objectID, in: home)
+            text += "Permanently delete automation \(target.name); enabled: \(target.isEnabled); attached scenes: \(target.actionSets.map { $0.uniqueIdentifier.uuidString }.sorted().joined(separator: ", "))"
         case "create_room":
             let name = try newName(r)
             guard !home.rooms.contains(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame }) else { throw failure("Room name already exists") }
@@ -514,6 +528,14 @@ final class AgentBridge {
 
     private func execute(_ r: AgentRequest, home: HMHome) async throws -> String {
         switch r.operation {
+        case "delete_scene":
+            let target = try scene(r.objectID, in: home)
+            try await HomeDeletion.deleteScene(target, in: home)
+            return "Scene deleted: \(target.uniqueIdentifier)"
+        case "delete_automation":
+            let target = try trigger(r.objectID, in: home)
+            try await HomeDeletion.deleteAutomation(target, in: home)
+            return "Automation deleted: \(target.uniqueIdentifier); shared scenes retained"
         case "create_room":
             let name = try newName(r)
             let room: HMRoom = try await withCheckedThrowingContinuation { continuation in
@@ -658,7 +680,7 @@ final class AgentBridge {
         }
         try write(["version": 2, "active": true, "writesAllowed": writesAllowed, "capturedAt": isoNow(), "sessionID": sessionID.uuidString,
                    "liveReadsSupported": true,
-                   "automationRulesVersion": 1, "automationWritesVersion": 1, "automationRulesSource": "HomeKit public API",
+                   "automationRulesVersion": 1, "automationWritesVersion": 1, "deletionWritesVersion": 1, "automationRulesSource": "HomeKit public API",
                    "valuesAreCached": true, "homes": homes], to: "inventory.json")
     }
     private func jsonValue(_ value: Any?) -> Any {

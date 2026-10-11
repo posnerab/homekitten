@@ -141,6 +141,16 @@ enum HomeBackupService {
         try encoder.encode(backup).write(to: directory.appendingPathComponent("\(backup.id.uuidString).json"), options: .atomic)
     }
 
+    // Retain public-API rule details as evidence; event rules cannot all be restored automatically.
+    static func saveDeletionBackup(home: HMHome) throws {
+        let backup = makeBackup(home: home)
+        try save(backup)
+        let rules: [String: Any] = ["homeID": home.uniqueIdentifier.uuidString,
+                                   "automations": home.triggers.map { AutomationInventory.trigger($0) }]
+        try JSONSerialization.data(withJSONObject: rules, options: [.prettyPrinted, .sortedKeys])
+            .write(to: try backupDirectory().appendingPathComponent("\(backup.id.uuidString).rules.json"), options: .atomic)
+    }
+
     static func load() throws -> [HomeBackup] {
         let directory = try backupDirectory()
         let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
@@ -357,5 +367,52 @@ private struct BackupDetailView: View {
     private func perform(_ operation: () async throws -> Void) async {
         do { try await operation(); message = "Restored successfully." } catch { message = error.localizedDescription }
         showingMessage = true
+    }
+}
+
+// Shared by the app and AgentBridge. Never delete attached scenes implicitly.
+@MainActor
+enum HomeDeletion {
+    static func sceneBlockReason(_ scene: HMActionSet, in home: HMHome) -> String? {
+        guard home.actionSets.contains(where: { $0.uniqueIdentifier == scene.uniqueIdentifier }) else {
+            return "Scene UUID not found in this Home"
+        }
+        guard scene.actionSetType == HMActionSetTypeUserDefined else {
+            return "HomeKit-owned scenes cannot be deleted here"
+        }
+        let references = home.triggers.filter { $0.actionSets.contains { $0.uniqueIdentifier == scene.uniqueIdentifier } }
+        if !references.isEmpty {
+            return "Remove this scene from these automations first (including disabled ones): " + references.map(\.name).sorted().joined(separator: ", ")
+        }
+        return nil
+    }
+
+    static func deleteScene(_ scene: HMActionSet, in home: HMHome) async throws {
+        if let reason = sceneBlockReason(scene, in: home) { throw error(reason) }
+        try HomeBackupService.saveDeletionBackup(home: home)
+        if let reason = sceneBlockReason(scene, in: home) { throw error(reason) }
+        try await home.removeActionSet(scene)
+        guard !home.actionSets.contains(where: { $0.uniqueIdentifier == scene.uniqueIdentifier }) else {
+            throw error("Deletion callback succeeded but the scene is still present; inspect Home before retrying")
+        }
+    }
+
+    static func deleteAutomation(_ trigger: HMTrigger, in home: HMHome) async throws {
+        guard home.triggers.contains(where: { $0.uniqueIdentifier == trigger.uniqueIdentifier }) else {
+            throw error("Automation UUID not found in this Home")
+        }
+        try HomeBackupService.saveDeletionBackup(home: home)
+        let sharedSceneIDs = Set(home.actionSets.filter { $0.actionSetType == HMActionSetTypeUserDefined }.map(\.uniqueIdentifier))
+        try await home.removeTrigger(trigger)
+        guard sharedSceneIDs.isSubset(of: Set(home.actionSets.map(\.uniqueIdentifier))) else {
+            throw error("A shared scene disappeared during automation deletion; inspect Home before retrying")
+        }
+        guard !home.triggers.contains(where: { $0.uniqueIdentifier == trigger.uniqueIdentifier }) else {
+            throw error("Deletion callback succeeded but the automation is still present; inspect Home before retrying")
+        }
+    }
+
+    private static func error(_ message: String) -> NSError {
+        NSError(domain: "HomeKittenDeletion", code: 1, userInfo: [NSLocalizedDescriptionKey: message])
     }
 }

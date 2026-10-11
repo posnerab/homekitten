@@ -96,7 +96,10 @@ operations and exact request fields are documented in `docs/USB_AGENT.md`.
 enabled. Event rule edits require `automationWritesVersion: 1`, validate the
 complete requested replacement, and disable the trigger while editing. A failed
 multi-step edit may leave it disabled. Accessory pairing, Home/user management,
-and destructive deletion remain unavailable.
+and accessory/room/Home/user deletion remain unavailable. Scene and automation
+deletion require `deletionWritesVersion: 1`, a target UUID, and no collateral
+fields. Preserve shared reference checks, pre-delete backup/rule snapshots and
+absence verification in both app and MCP; never cascade scene deletion.
 
 Inventory now includes public-API automation events, end events, predicate trees,
 recurrence/timing rules, activation state, and trigger-owned action sets. Check

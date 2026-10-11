@@ -20,7 +20,7 @@ import uuid
 
 BUNDLE = "abie.ios.homekitten"
 OPERATIONS = ["rename_accessory", "set_characteristic", "create_scene", "update_scene",
-              "rename_scene", "run_scene", "create_timer", "create_event_automation", "update_automation", "create_room", "assign_accessory"]
+              "rename_scene", "run_scene", "delete_scene", "delete_automation", "create_timer", "create_event_automation", "update_automation", "create_room", "assign_accessory"]
 
 
 RULE_FIELDS = {"events", "endEvents", "conditions", "clearConditions", "recurrenceWeekdays", "executeOnce"}
@@ -134,6 +134,11 @@ class Client:
         for key in ("objectID", "roomID"):
             if request.get(key):
                 request[key] = str(uuid.UUID(request[key])).upper()
+        if request["operation"] in ("delete_scene", "delete_automation"):
+            if not request.get("objectID"):
+                raise ValueError("Deletion requires objectID")
+            if set(request) - {"operation", "homeID", "objectID"}:
+                raise ValueError("Deletion accepts only operation, homeID, and objectID")
         validate_automation_rules(request)
         request["id"] = str(uuid.uuid4()).upper()
         inventory = self.inventory()
@@ -141,6 +146,8 @@ class Client:
             raise RuntimeError("Read-only session. Reconnect in HomeKitten with changes allowed.")
         if (request["operation"] == "create_event_automation" or any(key in request for key in RULE_FIELDS)) and inventory.get("automationWritesVersion", 0) < 1:
             raise RuntimeError("This app build does not support event automation writes; install the updated HomeKitten app.")
+        if request["operation"] in ("delete_scene", "delete_automation") and inventory.get("deletionWritesVersion", 0) < 1:
+            raise RuntimeError("This app build does not support deletion; install the updated HomeKitten app.")
         request["sessionID"] = inventory["sessionID"]
         encoded = json.dumps(request, allow_nan=False).encode()
         if len(encoded) > 65536:
@@ -246,7 +253,7 @@ def tool_definitions():
     return [
         {"name": "home_inventory", "description": "Read current HomeKit configuration with UUIDs, automation events, predicate conditions, timing/recurrence rules, and attached actions. Unsupported public-API details are marked. Characteristic values are cached, not fresh sensor reads.",
          "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False}},
-        {"name": "home_change_execute", "description": "Execute one HomeKit change automatically in a app-authorized connection session. update_scene replaces ALL existing scene actions. create_timer and create_event_automation default to disabled. Event/condition arrays replace existing rules; conditions are declarative all/any/not/characteristic trees. Updates disable the automation while editing; failures may leave it disabled.",
+        {"name": "home_change_execute", "description": "Execute one HomeKit change automatically in a app-authorized connection session. update_scene replaces ALL existing scene actions. create_timer and create_event_automation default to disabled. Event/condition arrays replace existing rules; conditions are declarative all/any/not/characteristic trees. Updates disable the automation while editing; failures may leave it disabled. delete_scene and delete_automation require objectID and accept no other change fields. Deletion is permanent and backed up first. Automation deletion keeps shared scenes; its HomeKit-owned actions belong to the deleted rule. Scenes referenced by any automation or owned by HomeKit cannot be deleted.",
          "inputSchema": {"type": "object", "required": ["operation", "homeID"],
                          "additionalProperties": False, "$defs": {"condition": condition}, "properties": {
                              "operation": {"type": "string", "enum": OPERATIONS},
@@ -286,7 +293,7 @@ def tool_definitions():
 def dispatch(client, method, params):
     if method == "initialize":
         return {"protocolVersion": params.get("protocolVersion", "2024-11-05"),
-                "capabilities": {"tools": {}}, "serverInfo": {"name": "homekitten-usb", "version": "1.1.0"}}
+                "capabilities": {"tools": {}}, "serverInfo": {"name": "homekitten-usb", "version": "1.2.0"}}
     if method == "ping":
         return {}
     if method == "tools/list":
