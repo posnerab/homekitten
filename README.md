@@ -101,3 +101,14 @@ characteristics from HomeKit on demand, with per-value timestamps and explicit
 errors/timeouts. It also works in read-only connections. `home_inventory` keeps
 its fast cached behavior. See [live read usage](docs/USB_AGENT.md#live-characteristic-reads)
 for limits and request-result retrieval.
+
+### Event automation editing through MCP
+
+`home_change_execute` supports `create_event_automation` and event rule updates
+through `update_automation`: accessory states, calendar/solar times, presence,
+end durations, AND/OR/NOT characteristic conditions, weekday recurrence and
+execute-once behavior. See [event automation writes](docs/USB_AGENT.md#event-automation-writes).
+Writes retain session authorization, automatic backups and single-consumption
+transactions. New automations default to disabled; updates disable during editing
+and re-enable only after success. Reconnect MCP clients after installing the
+updated signed app to discover the new schema.

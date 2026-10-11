@@ -125,6 +125,67 @@ class AgentTests(unittest.TestCase):
         self.assertIn("assign_accessory", schema["properties"]["operation"]["enum"])
         self.assertEqual(schema["properties"]["roomID"]["format"], "uuid")
 
+    def event_request(self):
+        ids = [str(uuid.uuid4()) for _ in range(4)]
+        return {"operation": "create_event_automation", "homeID": ids[0], "name": "Sonos exit", "enabled": True,
+                "events": [{"kind": "characteristic", "characteristicID": ids[1], "value": False},
+                           {"kind": "characteristic", "characteristicID": ids[2], "value": False}],
+                "conditions": {"kind": "all", "children": [
+                    {"kind": "characteristic", "characteristicID": ids[1], "value": False},
+                    {"kind": "characteristic", "characteristicID": ids[2], "value": False}]}, "sceneIDs": [ids[3]]}
+
+    def test_mcp_event_write_keeps_two_off_events_and_both_off_condition(self):
+        request = self.event_request()
+        original = json.dumps(request)
+        sent = []
+        client = agent.Client("device")
+        with patch.object(client, "inventory", return_value={"sessionID": "actual", "writesAllowed": True, "automationWritesVersion": 1}), patch.object(
+                client, "transfer", side_effect=lambda _, path, dest: sent.append(json.loads(pathlib.Path(path).read_text()))):
+            result = agent.dispatch(client, "tools/call", {"name": "home_change_execute", "arguments": request})
+        self.assertEqual(json.loads(result["content"][0]["text"])["state"], "submitted")
+        self.assertEqual(sent[0]["conditions"]["kind"], "all")
+        self.assertEqual([e["value"] for e in sent[0]["events"]], [False, False])
+        self.assertEqual([c["value"] for c in sent[0]["conditions"]["children"]], [False, False])
+        self.assertEqual(sent[0]["sceneIDs"], request["sceneIDs"])
+        self.assertEqual(json.dumps(request), original)
+
+    def test_event_rules_cannot_be_silently_ignored_by_old_app(self):
+        client = agent.Client("device")
+        with patch.object(client, "inventory", return_value={"sessionID": "old", "writesAllowed": True}), patch.object(client, "transfer") as transfer:
+            for request in [self.event_request(), {"operation": "update_automation", "homeID": str(uuid.uuid4()), "conditions": self.event_request()["conditions"]}]:
+                with self.assertRaisesRegex(RuntimeError, "does not support event automation"):
+                    client.submit(request)
+            transfer.assert_not_called()
+
+    def test_event_rules_reject_unsafe_or_malformed_inputs_before_queueing(self):
+        import copy
+        good = self.event_request()
+        variants = []
+        for key, value in [("events", []), ("events", good["events"] * 2), ("events", [{"kind": "duration", "durationSeconds": 30}]),
+                           ("recurrenceWeekdays", [1, 1]), ("recurrenceWeekdays", [True]), ("conditions", {"kind": "raw", "format": "TRUEPREDICATE"}),
+                           ("conditions", {"kind": "not", "children": good["conditions"]["children"]}), ("clearConditions", True)]:
+            bad = copy.deepcopy(good); bad[key] = value; variants.append(bad)
+        bad = copy.deepcopy(good); bad["events"][0]["characteristicID"] = "bad-id"; variants.append(bad)
+        bad = copy.deepcopy(good); bad["conditions"]["children"][0]["comparison"] = "greater_than"; variants.append(bad)
+        bad = copy.deepcopy(good); bad["events"][0]["unused"] = True; variants.append(bad)
+        client = agent.Client("device")
+        with patch.object(client, "transfer") as transfer:
+            for request in variants:
+                with self.subTest(request=request), self.assertRaises(ValueError):
+                    client.submit(request)
+            transfer.assert_not_called()
+
+    def test_event_time_presence_end_duration_and_clearing_are_supported(self):
+        request = {"operation": "update_automation", "homeID": str(uuid.uuid4()), "events": [
+            {"kind": "calendar", "hour": 18, "minute": 0}, {"kind": "significant_time", "significantEvent": "sunset", "offsetMinutes": -18},
+            {"kind": "presence", "presenceEvent": "first_entry", "presenceUser": "home_users"}],
+            "endEvents": [{"kind": "duration", "durationSeconds": 60}], "clearConditions": True, "recurrenceWeekdays": [], "executeOnce": False}
+        agent.validate_automation_rules(request)
+        schema = agent.tool_definitions()[1]["inputSchema"]
+        self.assertIn("create_event_automation", schema["properties"]["operation"]["enum"])
+        self.assertEqual(schema["properties"]["conditions"]["$ref"], "#/$defs/condition")
+        self.assertIn("endEvents", schema["properties"])
+
     def test_live_read_works_read_only_and_uses_separate_queue(self):
         with tempfile.TemporaryDirectory() as temp:
             root = pathlib.Path(temp)

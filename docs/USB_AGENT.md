@@ -86,13 +86,75 @@ the Python client so they discover the new tools.
 | rename_scene | objectID (scene UUID), name |
 | run_scene | objectID (scene UUID) |
 | create_timer | name, future fireDate (ISO 8601 UTC), sceneIDs; optional recurrenceMinutes and enabled |
-| update_automation | objectID (trigger UUID); name, sceneIDs, or enabled |
+| create_event_automation | name, events, sceneIDs; optional enabled, endEvents, conditions, recurrenceWeekdays, executeOnce |
+| update_automation | objectID (trigger UUID); name, sceneIDs, enabled, or event rule fields |
 
 `update_scene` replaces all existing scene actions. `update_automation` can
-rename, replace attached scenes, and enable/disable an existing trigger; it does
-not edit the trigger's events or predicates. `create_timer` is disabled unless
-`enabled` is true. Pairing accessories, creating event automations, and deleting
-Home objects are not exposed by this first version.
+rename, replace attached scenes, enable/disable, and edit event automation rules.
+`create_timer` and `create_event_automation` default to disabled. Creation validates
+all referenced characteristics/scenes before adding the disabled trigger; enabling
+is the last step. Rule updates disable an enabled trigger first, then restore its
+prior enabled state (or the requested `enabled`) after all edits succeed. A partial
+failure can leave the trigger disabled; inspect its transaction and inventory
+before retrying. Rules on timer/unsupported trigger types are rejected.
+Pairing and deletion remain unavailable.
+
+### Event automation writes
+
+Inventory advertises `automationWritesVersion: 1`; clients reject rule writes to
+older apps rather than silently ignoring fields. Existing MCP clients must
+reconnect to discover the extended `home_change_execute` schema.
+
+`events` replaces all start events (1–32); `endEvents` replaces all end events
+(0–32). Multiple start events are alternative triggers. Supported event objects:
+
+- `{"kind":"characteristic","characteristicID":"<UUID>","value":false}`:
+  exact state; characteristic must be readable and notify changes.
+- `{"kind":"calendar","hour":18,"minute":0}`: local time of day.
+- `{"kind":"significant_time","significantEvent":"sunset","offsetMinutes":-18}`:
+  sunrise/sunset, with signed offset from -720 to 720 minutes.
+- `{"kind":"presence","presenceEvent":"first_entry","presenceUser":"home_users"}`:
+  first_entry/last_exit and home_users/current_user.
+- `{"kind":"duration","durationSeconds":60}`: end events only; at most 86400 seconds.
+
+`conditions` replaces the entire predicate using a declarative tree. A leaf has
+`kind: characteristic`, an exact `characteristicID`, `value`, and optional
+`comparison` (equal by default; also not_equal, less_than, greater_than, at_most,
+at_least). Ordering requires a numeric characteristic. Compound nodes have
+`kind: all` (AND), `any` (OR), or `not` plus `children`. NOT requires one child;
+AND/OR accept 1–32. Nesting is bounded to eight levels. UUIDs are resolved within
+the selected Home; conditions require readable characteristics and compatible
+scalar values. Raw predicate strings/code are never accepted. Conditions are
+created with HomeKit's characteristic predicate factory and evaluated by the Home
+hub, never against cached inventory values.
+
+Omit `conditions` to preserve an existing predicate. `clearConditions: true`
+explicitly removes it and cannot be combined with `conditions`. An empty
+`endEvents` clears end events. `recurrenceWeekdays` replaces weekly recurrence
+with unique Foundation weekday numbers (Sunday=1 through Saturday=7); `[]` means
+every day. `executeOnce` controls repeat behavior. Omitted update fields remain
+unchanged. Event and scene replacement requires the complete desired lists.
+
+For example, trigger on either protection switch turning off, but unlock only
+when both are off:
+
+```json
+{
+  "operation": "create_event_automation",
+  "homeID": "<Home UUID>",
+  "name": "Sonos Unlock After Shabbos or Yom Tov",
+  "events": [
+    {"kind":"characteristic","characteristicID":"<Shabbos On UUID>","value":false},
+    {"kind":"characteristic","characteristicID":"<Yom Tov On UUID>","value":false}
+  ],
+  "conditions": {"kind":"all","children":[
+    {"kind":"characteristic","characteristicID":"<Shabbos On UUID>","value":false},
+    {"kind":"characteristic","characteristicID":"<Yom Tov On UUID>","value":false}
+  ]},
+  "sceneIDs": ["<Sonos Unlocked scene UUID>"],
+  "enabled": true
+}
+```
 
 Example request file, using UUIDs from inventory:
 
@@ -166,7 +228,8 @@ background execution. Do not mix object UUIDs from different source clients.
 
 Inventory version 2 now includes `automationRulesVersion: 1` and
 `automationRulesSource: "HomeKit public API"`. Existing keys and write operations
-are unchanged. This is read-only discovery, not predicate/event editing.
+are retained. Event/predicate writes are described above and independently
+advertised by `automationWritesVersion`.
 
 Each event automation exposes `events`, `endEvents`, `predicate`, `recurrences`,
 `executeOnce`, and activation state (including missing hub/location permission).

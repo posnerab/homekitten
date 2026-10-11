@@ -4,7 +4,7 @@ import UIKit
 @preconcurrency import HomeKit
 
 // The paired-device file service is the transport. No network listener or token.
-enum AgentValue: Codable, Sendable {
+enum AgentValue: Codable, Sendable, Equatable {
     case bool(Bool), number(Double), string(String)
     init(from decoder: Decoder) throws {
         let c = try decoder.singleValueContainer()
@@ -34,6 +34,28 @@ struct AgentAction: Codable, Sendable {
     let value: AgentValue
 }
 
+// Declarative rules only: never accept executable/raw predicate expressions.
+struct AgentEvent: Codable, Sendable, Equatable {
+    let kind: String
+    let characteristicID: UUID?
+    let value: AgentValue?
+    let hour: Int?
+    let minute: Int?
+    let significantEvent: String?
+    let offsetMinutes: Int?
+    let presenceEvent: String?
+    let presenceUser: String?
+    let durationSeconds: Double?
+}
+
+struct AgentCondition: Codable, Sendable {
+    let kind: String
+    let characteristicID: UUID?
+    let comparison: String?
+    let value: AgentValue?
+    let children: [AgentCondition]?
+}
+
 struct AgentRequest: Codable, Identifiable, Sendable {
     let id: UUID
     let sessionID: UUID
@@ -48,6 +70,16 @@ struct AgentRequest: Codable, Identifiable, Sendable {
     let fireDate: Date?
     let recurrenceMinutes: Int?
     let enabled: Bool?
+    let events: [AgentEvent]?
+    let endEvents: [AgentEvent]?
+    let conditions: AgentCondition?
+    let clearConditions: Bool?
+    let recurrenceWeekdays: [Int]?
+    let executeOnce: Bool?
+
+    var changesEventRules: Bool {
+        events != nil || endEvents != nil || conditions != nil || clearConditions != nil || recurrenceWeekdays != nil || executeOnce != nil
+    }
 }
 
 struct AgentReadRequest: Codable, Sendable {
@@ -318,6 +350,83 @@ final class AgentBridge {
             if let valid = c.metadata?.validValues, !valid.isEmpty, !valid.contains(where: { $0.doubleValue == number }) { throw failure("Value outside valid choices") }
         }
     }
+    private func readableCharacteristic(_ id: UUID?, in home: HMHome, notifying: Bool = false) throws -> HMCharacteristic {
+        guard let id, let c = home.accessories.flatMap(\.services).flatMap(\.characteristics).first(where: { $0.uniqueIdentifier == id }),
+              c.properties.contains(HMCharacteristicPropertyReadable),
+              !notifying || c.properties.contains(HMCharacteristicPropertySupportsEventNotification) else {
+            throw failure("Readable\(notifying ? " notifying" : "") characteristic UUID not found in this Home")
+        }
+        return c
+    }
+
+    private func makeEvents(_ specs: [AgentEvent], home: HMHome, end: Bool = false) throws -> [HMEvent] {
+        guard specs.count <= 32, end || !specs.isEmpty else { throw failure("Provide 1–32 trigger events (0–32 end events)") }
+        guard specs.enumerated().allSatisfy({ index, item in !specs.prefix(index).contains(item) }) else { throw failure("Duplicate events") }
+        return try specs.map { spec in
+            switch spec.kind {
+            case "characteristic":
+                let c = try readableCharacteristic(spec.characteristicID, in: home, notifying: true)
+                guard let value = spec.value else { throw failure("Characteristic event requires value") }
+                try validate(value, for: c)
+                return HMCharacteristicEvent<NSCopying>(characteristic: c, triggerValue: value.value)
+            case "calendar":
+                guard let hour = spec.hour, (0...23).contains(hour), let minute = spec.minute, (0...59).contains(minute) else { throw failure("Calendar event requires hour 0–23 and minute 0–59") }
+                return HMCalendarEvent(fire: DateComponents(hour: hour, minute: minute))
+            case "significant_time":
+                guard let name = spec.significantEvent, ["sunrise", "sunset"].contains(name), (-720...720).contains(spec.offsetMinutes ?? 0) else { throw failure("Use sunrise/sunset and offsetMinutes -720–720") }
+                return HMSignificantTimeEvent(significantEvent: name == "sunrise" ? .sunrise : .sunset, offset: DateComponents(minute: spec.offsetMinutes ?? 0))
+            case "presence":
+                guard let name = spec.presenceEvent, ["first_entry", "last_exit"].contains(name), ["home_users", "current_user"].contains(spec.presenceUser ?? "home_users") else { throw failure("Unsupported presence event/user scope") }
+                return HMPresenceEvent(presenceEventType: name == "first_entry" ? .firstEntry : .lastExit, presenceUserType: spec.presenceUser == "current_user" ? .currentUser : .homeUsers)
+            case "duration":
+                guard end, let seconds = spec.durationSeconds, seconds.isFinite, seconds > 0, seconds <= 86400 else { throw failure("Duration is an end event with 0 < durationSeconds <= 86400") }
+                return HMDurationEvent(duration: seconds)
+            default: throw failure("Unsupported event kind")
+            }
+        }
+    }
+
+    private func makeCondition(_ spec: AgentCondition, home: HMHome, depth: Int = 0) throws -> NSPredicate {
+        guard depth < 8 else { throw failure("Condition tree is too deep") }
+        if spec.kind == "characteristic" {
+            guard spec.children == nil else { throw failure("Characteristic conditions cannot have children") }
+            let c = try readableCharacteristic(spec.characteristicID, in: home)
+            guard let value = spec.value else { throw failure("Condition requires value") }
+            try validate(value, for: c)
+            let operators: [String: NSComparisonPredicate.Operator] = ["equal": .equalTo, "not_equal": .notEqualTo, "less_than": .lessThan, "greater_than": .greaterThan, "at_most": .lessThanOrEqualTo, "at_least": .greaterThanOrEqualTo]
+            guard let comparison = operators[spec.comparison ?? "equal"] else { throw failure("Unsupported condition comparison") }
+            if case .number = value {} else if !["equal", "not_equal"].contains(spec.comparison ?? "equal") { throw failure("Ordering requires a numeric characteristic") }
+            return HMEventTrigger.predicateForEvaluatingTrigger(c, relatedBy: comparison, toValue: value.value)
+        }
+        guard ["all", "any", "not"].contains(spec.kind), spec.characteristicID == nil, spec.value == nil, spec.comparison == nil,
+              let children = spec.children, !children.isEmpty, children.count <= 32, spec.kind != "not" || children.count == 1 else { throw failure("Use all/any with 1–32 children or not with one child") }
+        let predicates = try children.map { try makeCondition($0, home: home, depth: depth + 1) }
+        switch spec.kind {
+        case "all": return NSCompoundPredicate(andPredicateWithSubpredicates: predicates)
+        case "any": return NSCompoundPredicate(orPredicateWithSubpredicates: predicates)
+        default: return NSCompoundPredicate(notPredicateWithSubpredicate: predicates[0])
+        }
+    }
+
+    private func validateEventRules(_ r: AgentRequest, home: HMHome) throws -> String {
+        guard !(r.conditions != nil && r.clearConditions == true) else { throw failure("conditions and clearConditions are mutually exclusive") }
+        if let events = r.events { _ = try makeEvents(events, home: home) }
+        if let events = r.endEvents { _ = try makeEvents(events, home: home, end: true) }
+        if let conditions = r.conditions { _ = try makeCondition(conditions, home: home) }
+        if let days = r.recurrenceWeekdays {
+            guard days.count <= 7, Set(days).count == days.count, days.allSatisfy({ (1...7).contains($0) }) else { throw failure("recurrenceWeekdays must be unique weekdays 1–7; [] means every day") }
+        }
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        var lines: [String] = []
+        if let events = r.events { lines.append("Replace trigger events: " + String(decoding: try encoder.encode(events), as: UTF8.self)) }
+        if let events = r.endEvents { lines.append("Replace end events: " + String(decoding: try encoder.encode(events), as: UTF8.self)) }
+        if let condition = r.conditions { lines.append("Replace conditions: " + String(decoding: try encoder.encode(condition), as: UTF8.self)) }
+        if r.clearConditions == true { lines.append("Remove conditions") }
+        if let days = r.recurrenceWeekdays { lines.append("Weekdays: \(days)") }
+        if let once = r.executeOnce { lines.append("Execute once: \(once)") }
+        return lines.joined(separator: "\n")
+    }
+
     private func describe(_ r: AgentRequest) throws -> String {
         let home = try resolveHome(r)
         var text = "\(r.operation) in \(home.name)\nHome: \(r.homeID)\n"
@@ -372,11 +481,24 @@ final class AgentBridge {
             guard let ids = r.sceneIDs, !ids.isEmpty, Set(ids).count == ids.count else { throw failure("Unique sceneIDs required") }
             for id in ids { text += "Scene: \(try scene(id, in: home).name) [\(id)]\n" }
             text += "Fire: \(ISO8601DateFormatter().string(from: date)); repeat minutes: \(r.recurrenceMinutes ?? 0); enabled: \(r.enabled ?? false)"
+        case "create_event_automation":
+            let name = try newName(r)
+            guard !home.triggers.contains(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame }) else { throw failure("Automation name already exists") }
+            guard r.events != nil else { throw failure("Trigger events required") }
+            guard let ids = r.sceneIDs, !ids.isEmpty, Set(ids).count == ids.count else { throw failure("Unique nonempty sceneIDs required") }
+            for id in ids { _ = try scene(id, in: home) }
+            text += "Create event automation \(name); enabled: \(r.enabled ?? false)\n"
+            text += try validateEventRules(r, home: home)
         case "update_automation":
             let trigger = try trigger(r.objectID, in: home)
             text += "Automation: \(trigger.name)\n"
             text += "Currently enabled: \(trigger.isEnabled); current scenes: \(trigger.actionSets.map { $0.uniqueIdentifier.uuidString }.sorted().joined(separator: ", "))\n"
-            guard r.name != nil || r.enabled != nil || r.sceneIDs != nil else { throw failure("Provide name, enabled, or sceneIDs") }
+            guard r.name != nil || r.enabled != nil || r.sceneIDs != nil || r.changesEventRules else { throw failure("Provide name, enabled, sceneIDs, or event rules") }
+            if r.changesEventRules {
+                guard let event = trigger as? HMEventTrigger else { throw failure("Event rules require an event automation") }
+                text += "Current event rules: " + String(decoding: try JSONSerialization.data(withJSONObject: AutomationInventory.trigger(event), options: [.sortedKeys]), as: UTF8.self) + "\n"
+                text += try validateEventRules(r, home: home)
+            }
             if r.name != nil { text += "Name → \(try newName(r))\n" }
             if let enabled = r.enabled { text += "Enabled → \(enabled)\n" }
             if let ids = r.sceneIDs {
@@ -440,16 +562,33 @@ final class AgentBridge {
             for id in r.sceneIDs! { try await timer.addActionSet(scene(id, in: home)) }
             if r.enabled == true { try await timer.enable(true) }
             return "Timer saved: \(timer.uniqueIdentifier)"
+        case "create_event_automation":
+            let target = HMEventTrigger(name: try newName(r), events: try makeEvents(r.events!, home: home), predicate: try r.conditions.map { try makeCondition($0, home: home) })
+            try await home.addTrigger(target)
+            if let events = r.endEvents { try await target.updateEndEvents(makeEvents(events, home: home, end: true)) }
+            if let days = r.recurrenceWeekdays { try await target.updateRecurrences(days.isEmpty ? nil : days.map { DateComponents(weekday: $0) }) }
+            if let once = r.executeOnce { try await target.updateExecuteOnce(once) }
+            for id in r.sceneIDs! { try await target.addActionSet(scene(id, in: home)) }
+            if r.enabled == true { try await target.enable(true) }
+            return "Event automation saved: \(target.uniqueIdentifier)"
         case "update_automation":
             let target = try trigger(r.objectID, in: home)
             let wasEnabled = target.isEnabled
-            if r.sceneIDs != nil && wasEnabled { try await target.enable(false) }
+            if (r.sceneIDs != nil || r.changesEventRules) && wasEnabled { try await target.enable(false) }
+            if r.changesEventRules, let event = target as? HMEventTrigger {
+                if let events = r.events { try await event.updateEvents(makeEvents(events, home: home)) }
+                if let events = r.endEvents { try await event.updateEndEvents(makeEvents(events, home: home, end: true)) }
+                if let condition = r.conditions { try await event.updatePredicate(makeCondition(condition, home: home)) }
+                else if r.clearConditions == true { try await event.updatePredicate(nil) }
+                if let days = r.recurrenceWeekdays { try await event.updateRecurrences(days.isEmpty ? nil : days.map { DateComponents(weekday: $0) }) }
+                if let once = r.executeOnce { try await event.updateExecuteOnce(once) }
+            }
             if r.name != nil { try await target.updateName(newName(r)) }
             if let ids = r.sceneIDs {
                 for current in target.actionSets where !ids.contains(current.uniqueIdentifier) { try await target.removeActionSet(current) }
                 for id in ids where !target.actionSets.contains(where: { $0.uniqueIdentifier == id }) { try await target.addActionSet(scene(id, in: home)) }
             }
-            if r.enabled != nil || r.sceneIDs != nil { try await target.enable(r.enabled ?? wasEnabled) }
+            if r.enabled != nil || r.sceneIDs != nil || r.changesEventRules { try await target.enable(r.enabled ?? wasEnabled) }
         default: throw failure("Unsupported operation")
         }
         return "HomeKit operation completed"
@@ -519,7 +658,7 @@ final class AgentBridge {
         }
         try write(["version": 2, "active": true, "writesAllowed": writesAllowed, "capturedAt": isoNow(), "sessionID": sessionID.uuidString,
                    "liveReadsSupported": true,
-                   "automationRulesVersion": 1, "automationRulesSource": "HomeKit public API",
+                   "automationRulesVersion": 1, "automationWritesVersion": 1, "automationRulesSource": "HomeKit public API",
                    "valuesAreCached": true, "homes": homes], to: "inventory.json")
     }
     private func jsonValue(_ value: Any?) -> Any {

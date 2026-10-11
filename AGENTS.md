@@ -89,19 +89,20 @@ operations and exact request fields are documented in `docs/USB_AGENT.md`.
 - Accessory rename and writable scalar characteristic values.
 - Room creation and accessory assignment within the selected Home, with UUID validation and assignment read-back.
 - Scene creation, rename, action replacement, and execution.
-- Timer automation creation; existing automation rename, attached-scene
-  replacement, and enabled-state updates.
+- Timer and event automation creation; existing automation rename, attached-scene
+  replacement, enabled-state updates, and declarative event/condition editing.
 
 `update_scene` replaces all actions. `create_timer` is disabled unless explicitly
-enabled. Event/predicate editing, accessory pairing, Home/user management, and
-destructive deletion are not exposed by the bridge. Do not claim they work just
-because HomeKit or the manual UI offers related APIs.
+enabled. Event rule edits require `automationWritesVersion: 1`, validate the
+complete requested replacement, and disable the trigger while editing. A failed
+multi-step edit may leave it disabled. Accessory pairing, Home/user management,
+and destructive deletion remain unavailable.
 
 Inventory now includes public-API automation events, end events, predicate trees,
 recurrence/timing rules, activation state, and trigger-owned action sets. Check
 `automationRulesVersion` and unsupported markers before claiming a complete rule
 audit; shortcut internals and custom presence-user lists remain unavailable.
-This discovery does not add event/predicate editing.
+Event editing is separately advertised by `automationWritesVersion`.
 
 Inventory characteristic values are cached. A characteristic write attempts
 read-back when readable. An API result or cached value does not establish
