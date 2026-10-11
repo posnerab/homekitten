@@ -106,8 +106,10 @@ for limits and request-result retrieval.
 
 `home_change_execute` supports `create_event_automation` and event rule updates
 through `update_automation`: accessory states, calendar/solar times, presence,
-end durations, AND/OR/NOT characteristic conditions, weekday recurrence and
-execute-once behavior. See [event automation writes](docs/USB_AGENT.md#event-automation-writes).
+end durations, AND/OR/NOT characteristic and presence conditions, weekday recurrence and
+execute-once behavior. `additionalConditions` preserves the existing native predicate
+and appends an AND guard (`conditionCompositionVersion: 1`); the app condition editor
+uses this by default. See [event automation writes](docs/USB_AGENT.md#event-automation-writes).
 Writes retain session authorization, automatic backups and single-consumption
 transactions. New automations default to disabled; updates disable during editing
 and re-enable only after success. Reconnect MCP clients after installing the

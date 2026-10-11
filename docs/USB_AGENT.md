@@ -140,6 +140,18 @@ scalar values. Raw predicate strings/code are never accepted. Conditions are
 created with HomeKit's characteristic predicate factory and evaluated by the Home
 hub, never against cached inventory values.
 
+`additionalConditions` appends a declarative condition with AND to the original
+native predicate, preserving existing presence, time, OR and custom-user clauses.
+It requires `conditionCompositionVersion: 1` and cannot be combined with
+`conditions` or `clearConditions`. A presence leaf is
+`{"kind":"presence","presence":"at_home","presenceUser":"home_users"}`;
+`not_home` and `current_user` are also supported. Presence leaves require that
+same capability. The app editor defaults to append and offers explicit replacement.
+Some legacy accessory references cannot be edited by HomeKit: retain the original
+rule and inspect the failed transaction rather than replacing unknown conditions.
+Updates disable the rule while editing; after a failed update inspect its enabled
+state and restore its previous flag if necessary.
+
 Omit `conditions` to preserve an existing predicate. `clearConditions: true`
 explicitly removes it and cannot be combined with `conditions`. An empty
 `endEvents` clears end events. `recurrenceWeekdays` replaces weekly recurrence

@@ -1174,6 +1174,8 @@ struct AutomationConditionEditor: View {
     @State private var comparison = "Equals"
     @State private var valueText = ""
     @State private var status = ""
+    @State private var conditionKind = "Accessory Value"
+    @State private var replaceExisting = false
 
     private var selectedServices: [HMService] { accessoryChoices(home: home).first { $0.id == accessoryID }?.services ?? [] }
     private var service: HMService? { selectedServices.first { $0.uniqueIdentifier == serviceID } }
@@ -1181,6 +1183,10 @@ struct AutomationConditionEditor: View {
 
     var body: some View {
         Form {
+            Picker("Condition", selection: $conditionKind) {
+                ForEach(["Accessory Value", "Someone Is Home", "Nobody Is Home"], id: \.self) { Text($0) }
+            }
+            if conditionKind == "Accessory Value" {
             Picker("Accessory", selection: $accessoryID) {
                 Text("Select").tag(UUID?.none)
                 ForEach(accessoryChoices(home: home)) { Text($0.name).tag(Optional($0.id)) }
@@ -1197,26 +1203,42 @@ struct AutomationConditionEditor: View {
                 ForEach(["Equals", "Not Equal", "Less Than", "Greater Than", "At Most", "At Least"], id: \.self) { Text($0) }
             }
             if let characteristic { CharacteristicValueInput(characteristic: characteristic, valueText: $valueText) }
+            }
+            if trigger?.predicate != nil {
+                Text("The new condition is added with AND, keeping every existing condition.").font(.footnote)
+                Toggle("Replace All Existing Conditions", isOn: $replaceExisting)
+            }
             Button("Save Condition") { save() }
             if !status.isEmpty { Text(status).foregroundStyle(.secondary) }
             Button("Cancel") { dismiss() }
         }
-        .navigationTitle("Accessory Condition")
+        .navigationTitle("Automation Condition")
         .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
     }
 
     private func save() {
-        guard let trigger, let characteristic,
-              let value = parsedValue(valueText, format: characteristic.metadata?.format) else {
-            status = "Select a characteristic and valid value"; return
+        guard let trigger else { status = "Event automation required"; return }
+        let predicate: NSPredicate
+        if conditionKind == "Accessory Value" {
+            guard let characteristic, let value = parsedValue(valueText, format: characteristic.metadata?.format) else {
+                status = "Select a characteristic and valid value"; return
+            }
+            let operators: [String: NSComparisonPredicate.Operator] = [
+                "Equals": .equalTo, "Not Equal": .notEqualTo, "Less Than": .lessThan,
+                "Greater Than": .greaterThan, "At Most": .lessThanOrEqualTo, "At Least": .greaterThanOrEqualTo
+            ]
+            predicate = HMEventTrigger.predicateForEvaluatingTrigger(characteristic, relatedBy: operators[comparison] ?? .equalTo, toValue: value)
+        } else {
+            predicate = HMEventTrigger.predicateForEvaluatingTrigger(withPresence: HMPresenceEvent(
+                presenceEventType: conditionKind == "Someone Is Home" ? .firstEntry : .lastExit, presenceUserType: .homeUsers))
         }
-        let operators: [String: NSComparisonPredicate.Operator] = [
-            "Equals": .equalTo, "Not Equal": .notEqualTo, "Less Than": .lessThan,
-            "Greater Than": .greaterThan, "At Most": .lessThanOrEqualTo, "At Least": .greaterThanOrEqualTo
-        ]
-        let predicate = HMEventTrigger.predicateForEvaluatingTrigger(characteristic, relatedBy: operators[comparison] ?? .equalTo, toValue: value)
-        trigger.updatePredicate(predicate) { error in
-            Task { @MainActor in if let error { status = error.localizedDescription } else { dismiss() } }
+        Task { @MainActor in
+            do {
+                try HomeBackupService.saveDeletionBackup(home: home)
+                let combined = !replaceExisting ? trigger.predicate.map { NSCompoundPredicate(andPredicateWithSubpredicates: [$0, predicate]) } ?? predicate : predicate
+                try await trigger.updatePredicate(combined)
+                dismiss()
+            } catch { status = error.localizedDescription }
         }
     }
 }

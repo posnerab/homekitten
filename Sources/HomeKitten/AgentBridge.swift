@@ -50,6 +50,8 @@ struct AgentEvent: Codable, Sendable, Equatable {
 
 struct AgentCondition: Codable, Sendable {
     let kind: String
+    let presence: String?
+    let presenceUser: String?
     let characteristicID: UUID?
     let comparison: String?
     let value: AgentValue?
@@ -73,12 +75,13 @@ struct AgentRequest: Codable, Identifiable, Sendable {
     let events: [AgentEvent]?
     let endEvents: [AgentEvent]?
     let conditions: AgentCondition?
+    let additionalConditions: AgentCondition?
     let clearConditions: Bool?
     let recurrenceWeekdays: [Int]?
     let executeOnce: Bool?
 
     var changesEventRules: Bool {
-        events != nil || endEvents != nil || conditions != nil || clearConditions != nil || recurrenceWeekdays != nil || executeOnce != nil
+        events != nil || endEvents != nil || conditions != nil || additionalConditions != nil || clearConditions != nil || recurrenceWeekdays != nil || executeOnce != nil
     }
 }
 
@@ -388,6 +391,17 @@ final class AgentBridge {
 
     private func makeCondition(_ spec: AgentCondition, home: HMHome, depth: Int = 0) throws -> NSPredicate {
         guard depth < 8 else { throw failure("Condition tree is too deep") }
+        if spec.kind == "presence" {
+            guard ["at_home", "not_home"].contains(spec.presence ?? ""),
+                  ["home_users", "current_user"].contains(spec.presenceUser ?? "home_users"),
+                  spec.children == nil, spec.characteristicID == nil, spec.value == nil, spec.comparison == nil else {
+                throw failure("Presence condition requires at_home/not_home and home_users/current_user")
+            }
+            let event = HMPresenceEvent(presenceEventType: spec.presence == "at_home" ? .firstEntry : .lastExit,
+                                        presenceUserType: spec.presenceUser == "current_user" ? .currentUser : .homeUsers)
+            return HMEventTrigger.predicateForEvaluatingTrigger(withPresence: event)
+        }
+        guard spec.presence == nil, spec.presenceUser == nil else { throw failure("Presence fields require a presence condition") }
         if spec.kind == "characteristic" {
             guard spec.children == nil else { throw failure("Characteristic conditions cannot have children") }
             let c = try readableCharacteristic(spec.characteristicID, in: home)
@@ -409,10 +423,14 @@ final class AgentBridge {
     }
 
     private func validateEventRules(_ r: AgentRequest, home: HMHome) throws -> String {
-        guard !(r.conditions != nil && r.clearConditions == true) else { throw failure("conditions and clearConditions are mutually exclusive") }
+        guard [r.conditions != nil, r.additionalConditions != nil, r.clearConditions == true].filter({ $0 }).count <= 1 else {
+            throw failure("conditions, additionalConditions and clearConditions are mutually exclusive")
+        }
+        if r.additionalConditions != nil && r.operation != "update_automation" { throw failure("additionalConditions requires update_automation") }
         if let events = r.events { _ = try makeEvents(events, home: home) }
         if let events = r.endEvents { _ = try makeEvents(events, home: home, end: true) }
         if let conditions = r.conditions { _ = try makeCondition(conditions, home: home) }
+        if let conditions = r.additionalConditions { _ = try makeCondition(conditions, home: home) }
         if let days = r.recurrenceWeekdays {
             guard days.count <= 7, Set(days).count == days.count, days.allSatisfy({ (1...7).contains($0) }) else { throw failure("recurrenceWeekdays must be unique weekdays 1–7; [] means every day") }
         }
@@ -421,6 +439,7 @@ final class AgentBridge {
         if let events = r.events { lines.append("Replace trigger events: " + String(decoding: try encoder.encode(events), as: UTF8.self)) }
         if let events = r.endEvents { lines.append("Replace end events: " + String(decoding: try encoder.encode(events), as: UTF8.self)) }
         if let condition = r.conditions { lines.append("Replace conditions: " + String(decoding: try encoder.encode(condition), as: UTF8.self)) }
+        if let condition = r.additionalConditions { lines.append("AND additional conditions with the existing native predicate: " + String(decoding: try encoder.encode(condition), as: UTF8.self)) }
         if r.clearConditions == true { lines.append("Remove conditions") }
         if let days = r.recurrenceWeekdays { lines.append("Weekdays: \(days)") }
         if let once = r.executeOnce { lines.append("Execute once: \(once)") }
@@ -601,6 +620,11 @@ final class AgentBridge {
                 if let events = r.events { try await event.updateEvents(makeEvents(events, home: home)) }
                 if let events = r.endEvents { try await event.updateEndEvents(makeEvents(events, home: home, end: true)) }
                 if let condition = r.conditions { try await event.updatePredicate(makeCondition(condition, home: home)) }
+                else if let condition = r.additionalConditions {
+                    let added = try makeCondition(condition, home: home)
+                    let predicate = event.predicate.map { NSCompoundPredicate(andPredicateWithSubpredicates: [$0, added]) } ?? added
+                    try await event.updatePredicate(predicate)
+                }
                 else if r.clearConditions == true { try await event.updatePredicate(nil) }
                 if let days = r.recurrenceWeekdays { try await event.updateRecurrences(days.isEmpty ? nil : days.map { DateComponents(weekday: $0) }) }
                 if let once = r.executeOnce { try await event.updateExecuteOnce(once) }
@@ -680,7 +704,7 @@ final class AgentBridge {
         }
         try write(["version": 2, "active": true, "writesAllowed": writesAllowed, "capturedAt": isoNow(), "sessionID": sessionID.uuidString,
                    "liveReadsSupported": true,
-                   "automationRulesVersion": 1, "automationWritesVersion": 1, "deletionWritesVersion": 1, "automationRulesSource": "HomeKit public API",
+                   "automationRulesVersion": 1, "automationWritesVersion": 1, "deletionWritesVersion": 1, "conditionCompositionVersion": 1, "automationRulesSource": "HomeKit public API",
                    "valuesAreCached": true, "homes": homes], to: "inventory.json")
     }
     private func jsonValue(_ value: Any?) -> Any {

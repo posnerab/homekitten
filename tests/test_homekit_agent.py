@@ -197,6 +197,35 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(sent[0]["sceneIDs"], request["sceneIDs"])
         self.assertEqual(json.dumps(request), original)
 
+    def test_additive_conditions_require_capability_and_reject_replacement(self):
+        client = agent.Client("device")
+        base = {"operation": "update_automation", "homeID": str(uuid.uuid4()), "objectID": str(uuid.uuid4()),
+                "additionalConditions": {"kind": "presence", "presence": "at_home"}}
+        with patch.object(client, "inventory", return_value={"writesAllowed": True, "automationWritesVersion": 1}), patch.object(client, "transfer") as transfer:
+            with self.assertRaisesRegex(RuntimeError, "condition composition"):
+                client.submit(base)
+            transfer.assert_not_called()
+        for extra in ({"conditions": base["additionalConditions"]}, {"clearConditions": True},
+                      {"operation": "create_event_automation"}, {"additionalConditions": {"kind": "presence", "presence": "custom_users"}},
+                      {"additionalConditions": {"kind": "presence", "presence": "at_home", "rawPredicate": "TRUEPREDICATE"}}):
+            with self.assertRaises(ValueError):
+                client.submit(dict(base, **extra))
+        sent = []
+        with patch.object(client, "inventory", return_value={"sessionID": "actual", "writesAllowed": True, "automationWritesVersion": 1, "conditionCompositionVersion": 1}), patch.object(
+                client, "transfer", side_effect=lambda _, path, dest: sent.append(json.loads(pathlib.Path(path).read_text()))):
+            client.submit(base)
+        self.assertEqual(sent[0]["additionalConditions"], base["additionalConditions"])
+        self.assertNotIn("conditions", sent[0])
+
+    def test_nested_presence_requires_composition_capability(self):
+        client = agent.Client("device")
+        request = {"operation": "update_automation", "homeID": str(uuid.uuid4()), "conditions": {
+            "kind": "all", "children": [{"kind": "presence", "presence": "not_home", "presenceUser": "current_user"}]}}
+        with patch.object(client, "inventory", return_value={"writesAllowed": True, "automationWritesVersion": 1}), patch.object(client, "transfer") as transfer:
+            with self.assertRaisesRegex(RuntimeError, "condition composition"):
+                client.submit(request)
+            transfer.assert_not_called()
+
     def test_event_rules_cannot_be_silently_ignored_by_old_app(self):
         client = agent.Client("device")
         with patch.object(client, "inventory", return_value={"sessionID": "old", "writesAllowed": True}), patch.object(client, "transfer") as transfer:

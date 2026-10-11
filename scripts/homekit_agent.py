@@ -23,7 +23,7 @@ OPERATIONS = ["rename_accessory", "set_characteristic", "create_scene", "update_
               "rename_scene", "run_scene", "delete_scene", "delete_automation", "create_timer", "create_event_automation", "update_automation", "create_room", "assign_accessory"]
 
 
-RULE_FIELDS = {"events", "endEvents", "conditions", "clearConditions", "recurrenceWeekdays", "executeOnce"}
+RULE_FIELDS = {"events", "endEvents", "conditions", "additionalConditions", "clearConditions", "recurrenceWeekdays", "executeOnce"}
 COMPARISONS = ["equal", "not_equal", "less_than", "greater_than", "at_most", "at_least"]
 
 
@@ -33,8 +33,10 @@ def validate_automation_rules(request):
         return
     if request["operation"] not in ("create_event_automation", "update_automation"):
         raise ValueError("Event rules require an event automation operation")
-    if request.get("clearConditions") and "conditions" in request:
-        raise ValueError("conditions and clearConditions are mutually exclusive")
+    if sum(("conditions" in request, "additionalConditions" in request, request.get("clearConditions") is True)) > 1:
+        raise ValueError("conditions, additionalConditions and clearConditions are mutually exclusive")
+    if "additionalConditions" in request and request["operation"] != "update_automation":
+        raise ValueError("additionalConditions requires update_automation")
     if request["operation"] == "create_event_automation" and ("events" not in request or not request.get("sceneIDs") or not request.get("name")):
         raise ValueError("Event creation requires name, events, and sceneIDs")
     for field in ("clearConditions", "executeOnce"):
@@ -81,7 +83,10 @@ def validate_automation_rules(request):
     def condition(node, depth=0):
         if not isinstance(node, dict) or depth >= 8:
             raise ValueError("Invalid or overly deep condition tree")
-        if node.get("kind") == "characteristic":
+        if node.get("kind") == "presence":
+            if not set(node) <= {"kind", "presence", "presenceUser"} or node.get("presence") not in ("at_home", "not_home") or node.get("presenceUser", "home_users") not in ("home_users", "current_user"):
+                raise ValueError("Invalid presence condition")
+        elif node.get("kind") == "characteristic":
             if not set(node) <= {"kind", "characteristicID", "comparison", "value"} or node.get("comparison", "equal") not in COMPARISONS or type(node.get("value")) not in (bool, int, float, str):
                 raise ValueError("Invalid characteristic condition")
             node["characteristicID"] = str(uuid.UUID(node["characteristicID"])).upper()
@@ -93,8 +98,9 @@ def validate_automation_rules(request):
                 raise ValueError("Use all/any with children, or not with exactly one child")
             for child in children:
                 condition(child, depth + 1)
-    if "conditions" in request:
-        condition(request["conditions"])
+    for field in ("conditions", "additionalConditions"):
+        if field in request:
+            condition(request[field])
 
 
 class Client:
@@ -148,6 +154,10 @@ class Client:
             raise RuntimeError("This app build does not support event automation writes; install the updated HomeKitten app.")
         if request["operation"] in ("delete_scene", "delete_automation") and inventory.get("deletionWritesVersion", 0) < 1:
             raise RuntimeError("This app build does not support deletion; install the updated HomeKitten app.")
+        def needs_composition(node):
+            return isinstance(node, dict) and (node.get("kind") == "presence" or any(needs_composition(child) for child in node.get("children", [])))
+        if ("additionalConditions" in request or needs_composition(request.get("conditions"))) and inventory.get("conditionCompositionVersion", 0) < 1:
+            raise RuntimeError("This app build does not support condition composition; install the updated HomeKitten app.")
         request["sessionID"] = inventory["sessionID"]
         encoded = json.dumps(request, allow_nan=False).encode()
         if len(encoded) > 65536:
@@ -245,6 +255,8 @@ def tool_definitions():
             "kind": {"const": "duration"}, "durationSeconds": {"type": "number", "exclusiveMinimum": 0, "maximum": 86400}}}
     ]}
     condition = {"oneOf": [
+        {"type": "object", "additionalProperties": False, "required": ["kind", "presence"], "properties": {
+            "kind": {"const": "presence"}, "presence": {"enum": ["at_home", "not_home"]}, "presenceUser": {"enum": ["home_users", "current_user"]}}},
         {"type": "object", "additionalProperties": False, "required": ["kind", "characteristicID", "value"], "properties": {
             "kind": {"const": "characteristic"}, "characteristicID": {"type": "string", "format": "uuid"}, "comparison": {"enum": COMPARISONS}, "value": scalar}},
         {"type": "object", "additionalProperties": False, "required": ["kind", "children"], "properties": {
@@ -253,7 +265,7 @@ def tool_definitions():
     return [
         {"name": "home_inventory", "description": "Read current HomeKit configuration with UUIDs, automation events, predicate conditions, timing/recurrence rules, and attached actions. Unsupported public-API details are marked. Characteristic values are cached, not fresh sensor reads.",
          "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False}},
-        {"name": "home_change_execute", "description": "Execute one HomeKit change automatically in a app-authorized connection session. update_scene replaces ALL existing scene actions. create_timer and create_event_automation default to disabled. Event/condition arrays replace existing rules; conditions are declarative all/any/not/characteristic trees. Updates disable the automation while editing; failures may leave it disabled. delete_scene and delete_automation require objectID and accept no other change fields. Deletion is permanent and backed up first. Automation deletion keeps shared scenes; its HomeKit-owned actions belong to the deleted rule. Scenes referenced by any automation or owned by HomeKit cannot be deleted.",
+        {"name": "home_change_execute", "description": "Execute one HomeKit change automatically in a app-authorized connection session. update_scene replaces ALL existing scene actions. create_timer and create_event_automation default to disabled. Event/condition arrays replace existing rules; conditions are declarative all/any/not/characteristic/presence trees. additionalConditions ANDs with the existing native predicate without reconstructing or dropping any clause. Updates disable the automation while editing; failures may leave it disabled. delete_scene and delete_automation require objectID and accept no other change fields. Deletion is permanent and backed up first. Automation deletion keeps shared scenes; its HomeKit-owned actions belong to the deleted rule. Scenes referenced by any automation or owned by HomeKit cannot be deleted.",
          "inputSchema": {"type": "object", "required": ["operation", "homeID"],
                          "additionalProperties": False, "$defs": {"condition": condition}, "properties": {
                              "operation": {"type": "string", "enum": OPERATIONS},
@@ -272,6 +284,7 @@ def tool_definitions():
                              "events": {"type": "array", "minItems": 1, "maxItems": 32, "items": event, "description": "Replace all start events; duration is supported only in endEvents."},
                              "endEvents": {"type": "array", "maxItems": 32, "items": event},
                              "conditions": {"$ref": "#/$defs/condition"},
+                             "additionalConditions": {"$ref": "#/$defs/condition", "description": "update_automation only: AND with the native existing predicate, preserving all presence/time/OR/custom-user clauses. Mutually exclusive with conditions/clearConditions."},
                              "clearConditions": {"type": "boolean", "description": "true removes the predicate; omit to preserve it. Mutually exclusive with conditions."},
                              "recurrenceWeekdays": {"type": "array", "maxItems": 7, "uniqueItems": True, "items": {"type": "integer", "minimum": 1, "maximum": 7}, "description": "Foundation weekday: Sunday=1. [] means every day."},
                              "executeOnce": {"type": "boolean"}}}},
@@ -293,7 +306,7 @@ def tool_definitions():
 def dispatch(client, method, params):
     if method == "initialize":
         return {"protocolVersion": params.get("protocolVersion", "2024-11-05"),
-                "capabilities": {"tools": {}}, "serverInfo": {"name": "homekitten-usb", "version": "1.2.0"}}
+                "capabilities": {"tools": {}}, "serverInfo": {"name": "homekitten-usb", "version": "1.3.0"}}
     if method == "ping":
         return {}
     if method == "tools/list":
