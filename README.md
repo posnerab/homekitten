@@ -122,3 +122,14 @@ routes back up first and check that the target disappeared. Referenced or
 HomeKit-owned scenes are blocked; automation deletion keeps shared scenes and removes automation-owned actions.
 Deletion is permanent; rule snapshots cannot automatically restore every event
 rule. See [operation safeguards](docs/USB_AGENT.md).
+
+## Durable agent backups and recovery
+
+The agent client now saves and checksum-verifies a private configuration backup
+and transaction receipt before every submitted write. Supported settings can be
+previewed and restored by UUID, with backups before recovery writes and independent
+configuration verification afterward. Abie-mini also keeps verified copies on
+Mac-Extend. See [backup and recovery](docs/BACKUP_RECOVERY.md) for CLI/MCP tools,
+storage, uncertain-result handling, and the limits of Apple Home rule recovery.
+Refresh existing MCP connections to discover the new tools; this Python-only
+release uses the existing signed app without an app reinstall.

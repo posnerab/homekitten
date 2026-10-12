@@ -76,10 +76,27 @@ optional stdio tool server.
    HomeKit operations can partially complete. Never automatically replay a write
    just because a transfer or result retrieval failed.
 
+## Backups before changes and recovery
+
+Read [docs/BACKUP_RECOVERY.md](docs/BACKUP_RECOVERY.md) before changes requiring
+rollback. Use the current Python client for writes so its durable checksum-verified
+backup and write-ahead receipt supplement the app's immediate pre-write snapshot.
+Create a labelled baseline before a batch and retain every transaction/backup ID.
+Check the intended fields against recovery coverage before editing: unsupported
+native rules, hidden actions, creation/deletion and scene execution have no
+complete automatic inverse. Do not describe these as reversible merely because
+a snapshot exists. Use scoped recovery by exact UUID, inspect its preview, apply
+with the current planToken and require independent configuration verification.
+An indeterminate transaction must be retrieved, not replayed. Never use cached
+characteristic values as recovery values or the native UI's partial automation
+restore as complete rule recovery. Existing MCP processes need refresh after
+client changes; use the current CLI until the new tools are available.
+
 ## Scope of the bridge
 
 The current tools are `home_inventory`, `home_change_execute`,
-`home_change_result`, `home_read_characteristics`, and `home_read_result`.
+`home_change_result`, `home_read_characteristics`, `home_read_result`,
+`home_backup_create`, `home_backup_list`, `home_restore_preview`, and `home_restore_apply`.
 Live reads use separate queues and work in read-only sessions. They return
 per-characteristic timestamps or errors/timeouts, never a cached fallback.
 The old `home_change_propose` name is accepted as an alias

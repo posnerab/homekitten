@@ -18,6 +18,10 @@ import tempfile
 import time
 import uuid
 
+# Also support importing this client by file path in tests and host launchers.
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from homekit_backup import BackupStore, plan as recovery_plan, restore as recovery_restore, recovery_scope
+
 BUNDLE = "abie.ios.homekitten"
 OPERATIONS = ["rename_accessory", "set_characteristic", "create_scene", "update_scene",
               "rename_scene", "run_scene", "delete_scene", "delete_automation", "create_timer", "create_event_automation", "update_automation", "create_room", "assign_accessory"]
@@ -162,17 +166,55 @@ class Client:
         encoded = json.dumps(request, allow_nan=False).encode()
         if len(encoded) > 65536:
             raise ValueError("Request too large")
+        store = BackupStore()
+        backup = store.capture(inventory, label="before:" + request["operation"], request=request, identifier=request["id"])
+        record = store.load(backup["id"])
+        if request["operation"] == "set_characteristic":
+            # Cached state is not a reliable rollback value for a physical write.
+            read = self.live_read({"homeID": request["homeID"], "characteristicIDs": [request["objectID"]]})
+            record["beforeRead"] = read
+        recovery = recovery_scope(request, backup["id"])
+        record["recoveryScope"] = recovery
+        store.write(record)
+        if "kind" in recovery:
+            try:
+                preview = recovery_plan(store, self, **recovery)
+                recovery_status = {"state": preview["state"], "blocked": preview["blocked"], "scope": recovery}
+            except (ValueError, KeyError, TypeError, RuntimeError) as error:
+                recovery_status = {"state": "blocked", "reason": str(error), "scope": recovery}
+        else:
+            recovery_status = recovery
+        record["recoveryAssessment"] = recovery_status
+        record["status"] = "submission_indeterminate"
+        store.write(record)  # Write-ahead receipt: never replay after an uncertain transfer.
         with tempfile.TemporaryDirectory(prefix="homekitten-agent-") as temp:
             incoming = pathlib.Path(temp) / (request["id"] + ".json")
             incoming.write_bytes(encoded)
-            self.transfer("to", incoming, "Documents/AgentBridge/incoming/" + incoming.name)
-        return {"id": request["id"], "state": "submitted",
-                "message": "Queued for automatic execution in the authorized session; use home_change_result to retrieve the outcome."}
+            try:
+                self.transfer("to", incoming, "Documents/AgentBridge/incoming/" + incoming.name)
+            except (OSError, RuntimeError, subprocess.TimeoutExpired) as error:
+                raise RuntimeError("Submission uncertain; retrieve transaction " + request["id"] +
+                                   "; backupID is the same UUID. Inspect Home before retrying.") from error
+        record["status"] = "submitted"
+        try:
+            store.write(record)
+        except (OSError, RuntimeError) as error:
+            raise RuntimeError("Request transferred but receipt update failed; retrieve transaction " + request["id"] +
+                               "; backupID is the same UUID. Do not replay.") from error
+        return {"id": request["id"], "state": "submitted", "backupID": backup["id"],
+                "backupPath": backup["path"], "recovery": recovery_status, "message": "Queued for automatic execution in the authorized session; use home_change_result to retrieve the outcome."}
 
     def result(self, transaction):
         transaction = str(uuid.UUID(transaction)).upper()
         try:
-            return self.read("responses/" + transaction + ".json")
+            result = self.read("responses/" + transaction + ".json")
+            store = BackupStore()
+            if store.path(transaction).exists():
+                record = store.load(transaction)
+                record["status"] = result.get("state", "unknown")
+                record["outcome"] = result
+                store.write(record)
+            return result
         except RuntimeError:
             raise RuntimeError("Request is queued or device is unavailable; retry result retrieval")
 
@@ -262,10 +304,10 @@ def tool_definitions():
         {"type": "object", "additionalProperties": False, "required": ["kind", "children"], "properties": {
             "kind": {"enum": ["all", "any", "not"]}, "children": {"type": "array", "minItems": 1, "maxItems": 32, "items": {"$ref": "#/$defs/condition"}}}}
     ]}
-    return [
+    definitions = [
         {"name": "home_inventory", "description": "Read current HomeKit configuration with UUIDs, automation events, predicate conditions, timing/recurrence rules, and attached actions. Unsupported public-API details are marked. Characteristic values are cached, not fresh sensor reads.",
          "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False}},
-        {"name": "home_change_execute", "description": "Execute one HomeKit change automatically in a app-authorized connection session. update_scene replaces ALL existing scene actions. create_timer and create_event_automation default to disabled. Event/condition arrays replace existing rules; conditions are declarative all/any/not/characteristic/presence trees. additionalConditions ANDs with the existing native predicate without reconstructing or dropping any clause. Updates disable the automation while editing; failures may leave it disabled. delete_scene and delete_automation require objectID and accept no other change fields. Deletion is permanent and backed up first. Automation deletion keeps shared scenes; its HomeKit-owned actions belong to the deleted rule. Scenes referenced by any automation or owned by HomeKit cannot be deleted.",
+        {"name": "home_change_execute", "description": "Execute one HomeKit change automatically in a app-authorized connection session. A durable checksum-verified inventory backup and write-ahead receipt are required before submission; returns backupID and recovery assessment. update_scene replaces ALL existing scene actions. create_timer and create_event_automation default to disabled. Event/condition arrays replace existing rules; conditions are declarative all/any/not/characteristic/presence trees. additionalConditions ANDs with the existing native predicate without reconstructing or dropping any clause. Updates disable the automation while editing; failures may leave it disabled. delete_scene and delete_automation require objectID and accept no other change fields. Deletion is permanent and backed up first. Automation deletion keeps shared scenes; its HomeKit-owned actions belong to the deleted rule. Scenes referenced by any automation or owned by HomeKit cannot be deleted.",
          "inputSchema": {"type": "object", "required": ["operation", "homeID"],
                          "additionalProperties": False, "$defs": {"condition": condition}, "properties": {
                              "operation": {"type": "string", "enum": OPERATIONS},
@@ -301,12 +343,28 @@ def tool_definitions():
          "inputSchema": {"type": "object", "required": ["id"], "additionalProperties": False,
                          "properties": {"id": {"type": "string", "format": "uuid"}}}}
     ]
+    recovery_properties = {"identifier": {"type": "string", "format": "uuid"},
+                           "home_id": {"type": "string", "format": "uuid"},
+                           "kind": {"enum": ["accessory", "scene", "automation", "characteristic"]},
+                           "object_id": {"type": "string", "format": "uuid"},
+                           "fields": {"type": "array", "minItems": 1, "uniqueItems": True, "items": {"enum": [
+                               "name", "roomID", "actions", "value", "enabled", "sceneIDs", "events", "endEvents", "conditions",
+                               "additionalConditions", "clearConditions", "recurrenceWeekdays", "executeOnce"]}}}
+    for name, description, properties, required, readonly in [
+        ("home_backup_create", "Save and checksum-verify a durable private inventory backup. Values are cached; public API limitations are recorded.", {"label": {"type": "string"}}, [], True),
+        ("home_backup_list", "List private agent backups and integrity status without dumping Home metadata.", {}, [], True),
+        ("home_restore_preview", "Preview recovery of one existing object by exact UUID; unsupported rules block recovery. Omit fields for all supported settings. No Home writes.", recovery_properties, ["identifier", "home_id", "kind", "object_id"], True),
+        ("home_restore_apply", "Apply a preview using its planToken, back up before each write, stop on failure/uncertain transaction, verify configuration. Never runs scenes or recreates missing objects.", dict(recovery_properties, planToken={"type": "string"}), ["identifier", "home_id", "kind", "object_id", "planToken"], False)
+    ]:
+        definitions.append({"name": name, "description": description, "annotations": {"readOnlyHint": readonly},
+                            "inputSchema": {"type": "object", "additionalProperties": False, "properties": properties, "required": required}})
+    return definitions
 
 
 def dispatch(client, method, params):
     if method == "initialize":
         return {"protocolVersion": params.get("protocolVersion", "2024-11-05"),
-                "capabilities": {"tools": {}}, "serverInfo": {"name": "homekitten-usb", "version": "1.3.0"}}
+                "capabilities": {"tools": {}}, "serverInfo": {"name": "homekitten-usb", "version": "1.4.0"}}
     if method == "ping":
         return {}
     if method == "tools/list":
@@ -325,10 +383,18 @@ def dispatch(client, method, params):
                 result = client.live_read(args)
             elif name == "home_read_result":
                 result = client.read_result(args["id"])
+            elif name == "home_backup_create":
+                result = BackupStore().capture(client.inventory(), label=args.get("label", "manual"))
+            elif name == "home_backup_list":
+                result = BackupStore().list()
+            elif name == "home_restore_preview":
+                result = recovery_plan(BackupStore(), client, **args)
+            elif name == "home_restore_apply":
+                result = recovery_restore(BackupStore(), client, args)
             else:
                 raise ValueError("Unknown tool")
             return {"content": [{"type": "text", "text": json.dumps(result)}]}
-        except (ValueError, KeyError, RuntimeError, subprocess.TimeoutExpired) as error:
+        except (ValueError, KeyError, TypeError, OSError, RuntimeError, subprocess.TimeoutExpired) as error:
             return {"content": [{"type": "text", "text": str(error)}], "isError": True}
     raise ValueError("Unknown method")
 
@@ -356,6 +422,10 @@ def main():
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("inventory")
     commands.add_parser("mcp")
+    commands.add_parser("backup").add_argument("--label", default="manual")
+    commands.add_parser("backups")
+    for command in ("restore-preview", "restore"):
+        commands.add_parser(command).add_argument("request", type=pathlib.Path)
     commands.add_parser("submit").add_argument("request", type=pathlib.Path)
     commands.add_parser("result").add_argument("id")
     commands.add_parser("read").add_argument("request", type=pathlib.Path)
@@ -368,6 +438,14 @@ def main():
     try:
         if args.command == "inventory":
             result = client.inventory()
+        elif args.command == "backup":
+            result = BackupStore().capture(client.inventory(), label=args.label)
+        elif args.command == "backups":
+            result = BackupStore().list()
+        elif args.command == "restore-preview":
+            result = recovery_plan(BackupStore(), client, **json.loads(args.request.read_text()))
+        elif args.command == "restore":
+            result = recovery_restore(BackupStore(), client, json.loads(args.request.read_text()))
         elif args.command == "submit":
             result = client.submit(json.loads(args.request.read_text()))
         elif args.command == "read":
@@ -377,7 +455,7 @@ def main():
         else:
             result = client.result(args.id)
         print(json.dumps(result, indent=2))
-    except (ValueError, KeyError, RuntimeError, subprocess.TimeoutExpired) as error:
+    except (ValueError, KeyError, TypeError, OSError, RuntimeError, subprocess.TimeoutExpired) as error:
         print(str(error), file=sys.stderr)
         sys.exit(1)
 

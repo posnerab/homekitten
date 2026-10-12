@@ -14,6 +14,13 @@ SPEC.loader.exec_module(agent)
 
 
 class AgentTests(unittest.TestCase):
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        environment = patch.dict(agent.os.environ, {"HOMEKITTEN_BACKUP_DIR": directory.name})
+        environment.start()
+        self.addCleanup(environment.stop)
+
     def test_inventory_rejects_stale_or_disconnected(self):
         client = agent.Client("device")
         for record in [
@@ -103,7 +110,7 @@ class AgentTests(unittest.TestCase):
         client = agent.Client("device")
         with self.assertRaises(ValueError):
             client.submit({"operation": "approve"})
-        self.assertEqual([t["name"] for t in agent.tool_definitions()], ["home_inventory", "home_change_execute", "home_change_result", "home_read_characteristics", "home_read_result"])
+        self.assertEqual([t["name"] for t in agent.tool_definitions()], ["home_inventory", "home_change_execute", "home_change_result", "home_read_characteristics", "home_read_result", "home_backup_create", "home_backup_list", "home_restore_preview", "home_restore_apply"])
 
     def test_read_only_session_cannot_send_changes(self):
         client = agent.Client("device")

@@ -321,3 +321,14 @@ Windows host. Registration alone does not establish live access. Refresh MCP
 servers or restart Codex to load the connection in an existing chat. HomeKitten
 must stay running with Agent Access connected, and the Mac must stay awake.
 This path uses the installed signed Mac app; the phone/iPad is not needed.
+
+## Durable client backups and recovery
+
+Every current client write additionally saves a checksum-verified inventory backup
+and write-ahead receipt outside the app container. `home_backup_create`,
+`home_backup_list`, `home_restore_preview` and `home_restore_apply` expose scoped
+recovery through MCP; the CLI exposes `backup`, `backups`, `restore-preview` and
+`restore`. See [backup and recovery](BACKUP_RECOVERY.md) for the procedure and
+public API limits. `home_change_execute` returns its backup ID and recovery
+assessment. Refresh existing MCP clients for the new schema. Client-only releases
+do not need the signed app reinstalled.
