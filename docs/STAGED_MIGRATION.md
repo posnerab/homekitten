@@ -3,7 +3,7 @@
 Use the signed app advertising `membershipWritesVersion: 1`,
 `incrementalSceneWritesVersion: 1`, `nativeReferenceWritesVersion: 1`,
 `booleanNormalizationVersion: 1`, `migrationPlanVersion: 1`, and
-`backupConfigurationVersion: 2`, together with Python MCP client 1.5.0.
+`backupConfigurationVersion: 2`, together with Python MCP client 1.6.0.
 Existing UUIDs, pairings, session checks, consumed transactions and mirrored
 write-ahead backups remain in place. Reconnect existing MCP clients for the new
 schema. Only the Mac development install is part of this release; iOS source is
@@ -16,8 +16,9 @@ Names are only values for explicit create/rename operations, never lookup keys.
 The app validates the entire request before its first write and reads back
 membership/name after completion. Addition occurs before removal in replacement
 operations. Membership changes preserve the group/zone UUID and unrelated members
-when using incremental fields. No room, group, zone, accessory or Home deletion
-operation is added.
+when using incremental fields. General accessory, room, group, zone and Home
+deletion remains unavailable. Guarded populated-bridge retirement is described
+below.
 
 | operation | Fields beyond homeID and operation |
 | --- | --- |
@@ -127,6 +128,38 @@ for parity or retirement readiness.
 
 `retirementAllowed` and `physicalParityVerified` remain false in the planner;
 these gates cannot be certified by a configuration-only tool.
+
+## Bridge retirement through MCP
+
+Build 8 advertises `bridgeRemovalVersion: 1`. MCP `home_change_execute` supports
+`remove_bridge` with exact `homeID`, bridge `objectID`, the complete current
+`bridgedAccessoryIDs`, and `auditedOpaqueSceneIDs`. No other change fields are
+accepted. Refresh a cached MCP connection, or initialize a fresh stdio session
+with the current client to discover this contract.
+
+The child list must match the populated bridge exactly. The opaque scene list
+must match all current zero-public-action and unsupported-action sets; it records
+the operator's preceding audit, rather than claiming to inspect private audio or
+shortcut internals. Keep that audit and command/reachability evidence with the
+retirement receipt. The app refuses remaining scalar scene, service-group,
+native start/end-event or predicate references to the bridge or its children.
+Predicate inspection follows native function operands and collections without
+evaluating or rewriting them; unknown expressions/events fail closed.
+
+Removal saves a fresh Home/rule backup and repeats preflight, calls the public
+HomeKit bridge-removal API, then checks absence of the bridge/children and
+preservation of unrelated accessory, scene/action, group/member and automation
+UUIDs. Independently read Home configuration and service health afterward.
+Pairing removal has no automatic inverse: configuration snapshots do not
+re-pair a bridge or recreate its original HomeKit UUIDs. Existing authorized
+sessions and task scope govern execution; no approval sheet is introduced.
+
+If Apple denies direct edits of a scalar trigger-owned set, create a verified
+user-defined counterpart scene and change only the original trigger's attached
+scene association through `update_automation`. This avoids reconstructing its
+native events/predicate and preserves the trigger UUID and enabled state.
+Independently compare every original rule field after the change. Do not use
+this approach to reconstruct hidden actions or replay an uncertain failed edit.
 
 ## Recovery additions
 

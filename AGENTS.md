@@ -113,8 +113,11 @@ operations and exact request fields are documented in `docs/USB_AGENT.md`.
 `update_scene` replaces all actions. `create_timer` is disabled unless explicitly
 enabled. Event rule edits require `automationWritesVersion: 1`, validate the
 complete requested replacement, and disable the trigger while editing. A failed
-multi-step edit may leave it disabled. Accessory pairing, Home/user management,
-and accessory/room/Home/user deletion remain unavailable. Scene and automation
+multi-step edit may leave it disabled. General accessory pairing, Home/user management,
+and standalone accessory/room/Home/user deletion remain unavailable. Populated
+bridge retirement requires `bridgeRemovalVersion: 1`, complete child UUIDs,
+the preceding opaque-scene audit, and zero remaining scene/group/native-rule
+references; see `docs/STAGED_MIGRATION.md`. Scene and automation
 deletion require `deletionWritesVersion: 1`, a target UUID, and no collateral
 fields. Preserve shared reference checks, pre-delete backup/rule snapshots and
 absence verification in both app and MCP; never cascade scene deletion.

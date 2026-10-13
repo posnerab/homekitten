@@ -286,6 +286,8 @@ def scene_patch_recovery(saved, current, home, identifiers=None):
 
 
 def recovery_scope(request, identifier, inventory=None):
+    if request["operation"] == "remove_bridge":
+        return {"state": "manual", "reason": "Bridge removal deletes its Home pairing and children. Configuration backups are evidence, not an automatic pairing restore."}
     operation = request["operation"]
     choices = {"rename_accessory": ("accessory", ["name"]), "assign_accessory": ("accessory", ["roomID"]),
                "set_characteristic": ("characteristic", ["value"]), "rename_scene": ("scene", ["name"]),

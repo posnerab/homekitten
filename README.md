@@ -123,6 +123,14 @@ HomeKit-owned scenes are blocked; automation deletion keeps shared scenes and re
 Deletion is permanent; rule snapshots cannot automatically restore every event
 rule. See [operation safeguards](docs/USB_AGENT.md).
 
+## Populated bridge retirement through MCP
+
+Signed build 8 and client 1.6.0 add `remove_bridge` to `home_change_execute`.
+It requires the exact bridge, complete child UUID list, and preceding opaque-scene
+audit, and refuses remaining scene/group/native-rule references. After removal it
+verifies child absence and preservation of unrelated objects. Pairing deletion
+has no automatic inverse. See [the retirement contract](docs/STAGED_MIGRATION.md#bridge-retirement-through-mcp).
+
 ## Durable agent backups and recovery
 
 The agent client now saves and checksum-verifies a private configuration backup

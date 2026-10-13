@@ -90,6 +90,7 @@ the Python client so they discover the new tools.
 | create_timer | name, future fireDate (ISO 8601 UTC), sceneIDs; optional recurrenceMinutes and enabled |
 | create_event_automation | name, events, sceneIDs; optional enabled, endEvents, conditions, recurrenceWeekdays, executeOnce |
 | update_automation | objectID (trigger UUID); name, sceneIDs, enabled, or event rule fields |
+| remove_bridge | objectID (populated bridge UUID), complete bridgedAccessoryIDs and auditedOpaqueSceneIDs; no other fields |
 
 `update_scene` replaces all existing scene actions. `update_automation` can
 rename, replace attached scenes, enable/disable, and edit event automation rules.
@@ -99,6 +100,10 @@ is the last step. Rule updates disable an enabled trigger first, then restore it
 prior enabled state (or the requested `enabled`) after all edits succeed. A partial
 failure can leave the trigger disabled; inspect its transaction and inventory
 before retrying. Rules on timer/unsupported trigger types are rejected.
+Bridge retirement requires `bridgeRemovalVersion: 1` and a preceding audit of
+private/opaque scene content. It rejects remaining scene/group/native-rule
+references and stale child/audit lists. Pairing deletion is permanent; see
+[the MCP retirement safeguards](STAGED_MIGRATION.md#bridge-retirement-through-mcp).
 Scene and automation deletion require `deletionWritesVersion: 1`. Deletion is
 permanent: a scene referenced by any automation (even disabled) or owned by
 HomeKit is rejected. Automation deletion retains shared user-defined scenes;

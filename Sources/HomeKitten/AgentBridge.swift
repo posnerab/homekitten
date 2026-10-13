@@ -88,6 +88,8 @@ struct AgentRequest: Codable, Identifiable, Sendable {
     let removeActionIDs: [UUID]?
     let actionUpdates: [AgentActionUpdate]?
     let referenceMappings: [AgentReferenceMapping]?
+    let bridgedAccessoryIDs: [UUID]?
+    let auditedOpaqueSceneIDs: [UUID]?
     let fireDate: Date?
     let recurrenceMinutes: Int?
     let enabled: Bool?
@@ -478,6 +480,18 @@ final class AgentBridge {
 
     private func describe(_ r: AgentRequest) throws -> String {
         let home = try resolveHome(r)
+        if r.operation == "remove_bridge" {
+            guard r.objectID != nil, r.roomID == nil, r.name == nil, r.value == nil, r.actions == nil,
+                  r.sceneIDs == nil, r.serviceIDs == nil, r.addServiceIDs == nil, r.removeServiceIDs == nil,
+                  r.roomIDs == nil, r.addRoomIDs == nil, r.removeRoomIDs == nil, r.removeActionIDs == nil,
+                  r.actionUpdates == nil, r.referenceMappings == nil, r.fireDate == nil,
+                  r.recurrenceMinutes == nil, r.enabled == nil, !r.changesEventRules else {
+                throw failure("Bridge removal accepts only its target and audit UUID lists")
+            }
+            let bridge = try HomeBridgeRemoval.validate(r, home: home)
+            return "Permanently remove bridge \(bridge.name) [\(bridge.uniqueIdentifier)] and \(bridge.bridgedAccessories.count) children. Pairing has no automatic inverse; unrelated objects are retained."
+        }
+        guard r.bridgedAccessoryIDs == nil, r.auditedOpaqueSceneIDs == nil else { throw failure("Bridge audit fields require remove_bridge") }
         let extensions = ["create_group", "update_group", "create_zone", "update_zone", "rename_room", "patch_scene", "remap_automation_references"]
         if extensions.contains(r.operation) { return try describeExtension(r, home: home) }
         guard r.serviceIDs == nil, r.addServiceIDs == nil, r.removeServiceIDs == nil, r.roomIDs == nil,
@@ -588,6 +602,8 @@ final class AgentBridge {
             return try await executeExtension(r, home: home)
         }
         switch r.operation {
+        case "remove_bridge":
+            return try await HomeBridgeRemoval.remove(r, home: home)
         case "delete_scene":
             let target = try scene(r.objectID, in: home)
             try await HomeDeletion.deleteScene(target, in: home)
@@ -953,7 +969,7 @@ final class AgentBridge {
         try write(["version": 2, "active": true, "writesAllowed": writesAllowed, "capturedAt": isoNow(), "sessionID": sessionID.uuidString,
                    "liveReadsSupported": true, "membershipWritesVersion": 1, "incrementalSceneWritesVersion": 1,
                    "nativeReferenceWritesVersion": 1, "booleanNormalizationVersion": 1, "migrationPlanVersion": 1,
-                   "backupConfigurationVersion": 2,
+                   "backupConfigurationVersion": 2, "bridgeRemovalVersion": 1,
                    "automationRulesVersion": 1, "automationWritesVersion": 1, "deletionWritesVersion": 1, "conditionCompositionVersion": 1, "automationRulesSource": "HomeKit public API",
                    "valuesAreCached": true, "homes": homes], to: "inventory.json")
     }

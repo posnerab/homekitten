@@ -25,7 +25,7 @@ from homekit_migration import migration_plan, characteristics, normalize
 
 BUNDLE = "abie.ios.homekitten"
 OPERATIONS = ["rename_accessory", "set_characteristic", "create_scene", "update_scene",
-              "rename_scene", "run_scene", "delete_scene", "delete_automation", "create_timer", "create_event_automation", "update_automation", "create_room", "assign_accessory", "create_group", "update_group", "create_zone", "update_zone", "rename_room", "patch_scene", "remap_automation_references"]
+              "rename_scene", "run_scene", "delete_scene", "delete_automation", "create_timer", "create_event_automation", "update_automation", "create_room", "assign_accessory", "create_group", "update_group", "create_zone", "update_zone", "rename_room", "patch_scene", "remap_automation_references", "remove_bridge"]
 
 
 RULE_FIELDS = {"events", "endEvents", "conditions", "additionalConditions", "clearConditions", "recurrenceWeekdays", "executeOnce"}
@@ -109,7 +109,8 @@ def validate_automation_rules(request):
 
 
 EXTENSION_CAPABILITIES = {**{op: "membershipWritesVersion" for op in ("create_group", "update_group", "create_zone", "update_zone", "rename_room")},
-                          "patch_scene": "incrementalSceneWritesVersion", "remap_automation_references": "nativeReferenceWritesVersion"}
+                          "patch_scene": "incrementalSceneWritesVersion", "remap_automation_references": "nativeReferenceWritesVersion",
+                          "remove_bridge": "bridgeRemovalVersion"}
 
 
 def validate_extension(request):
@@ -121,17 +122,21 @@ def validate_extension(request):
         "create_group": {"name", "serviceIDs"}, "update_group": {"objectID", "name", "serviceIDs", "addServiceIDs", "removeServiceIDs"},
         "create_zone": {"name", "roomIDs"}, "update_zone": {"objectID", "name", "roomIDs", "addRoomIDs", "removeRoomIDs"},
         "rename_room": {"objectID", "name"}, "patch_scene": {"objectID", "actions", "removeActionIDs", "actionUpdates"},
-        "remap_automation_references": {"objectID", "referenceMappings"}}[operation]
+        "remap_automation_references": {"objectID", "referenceMappings"},
+        "remove_bridge": {"objectID", "bridgedAccessoryIDs", "auditedOpaqueSceneIDs"}}[operation]
     if set(request) - allowed: raise ValueError("Unrelated fields rejected for " + operation)
     if operation.startswith("create_") or operation == "rename_room":
         if not isinstance(request.get("name"), str) or not request["name"].strip() or len(request["name"].strip()) > 128: raise ValueError("Name must contain 1–128 characters")
     if not operation.startswith("create_") and not request.get("objectID"): raise ValueError("Exact target objectID required")
-    for field in ("serviceIDs", "addServiceIDs", "removeServiceIDs", "roomIDs", "addRoomIDs", "removeRoomIDs", "removeActionIDs"):
+    for field in ("serviceIDs", "addServiceIDs", "removeServiceIDs", "roomIDs", "addRoomIDs", "removeRoomIDs", "removeActionIDs", "bridgedAccessoryIDs", "auditedOpaqueSceneIDs"):
         if field in request:
             values = request[field]
             if not isinstance(values, list) or len(values) > 512: raise ValueError("Membership/action list must contain at most 512 UUIDs")
             request[field] = [str(uuid.UUID(v)).upper() for v in values]
             if len(set(request[field])) != len(values): raise ValueError("Duplicate membership/action UUID")
+    if operation == "remove_bridge":
+        if not request.get("bridgedAccessoryIDs") or "auditedOpaqueSceneIDs" not in request:
+            raise ValueError("Bridge removal requires its complete child list and audited opaque scene list")
     for replacement, add, remove in (("serviceIDs", "addServiceIDs", "removeServiceIDs"), ("roomIDs", "addRoomIDs", "removeRoomIDs")):
         if replacement in request and (add in request or remove in request): raise ValueError("Replacement and incremental membership are mutually exclusive")
         if set(request.get(add, [])) & set(request.get(remove, [])): raise ValueError("Membership additions and removals overlap")
@@ -160,6 +165,17 @@ def normalize_request(request, inventory):
     homes = [h for h in inventory.get("homes", []) if h["id"].upper() == request["homeID"]]
     if not homes: return  # Older unit fixtures; the app always resolves the exact Home UUID.
     home = homes[0]; chars = characteristics(home)
+    if request["operation"] == "remove_bridge":
+        if not any(a["id"] == request["objectID"] for a in home["accessories"]):
+            raise ValueError("Bridge UUID not found in this Home")
+        children = {a["id"] for a in home["accessories"] if a.get("bridgeID") == request["objectID"]}
+        if not children or children != set(request["bridgedAccessoryIDs"]):
+            raise ValueError("Bridged accessory list changed; inspect before removal")
+        opaque = {s["id"] for s in home["scenes"] if not s.get("actions") or any(a.get("kind") != "characteristicWrite" or a.get("supported") is False for a in s["actions"])}
+        if opaque != set(request["auditedOpaqueSceneIDs"]):
+            raise ValueError("Opaque scene audit list changed; inspect before removal")
+    elif "bridgedAccessoryIDs" in request or "auditedOpaqueSceneIDs" in request:
+        raise ValueError("Bridge audit fields require remove_bridge")
     def value(identifier, scalar):
         if identifier not in chars: raise ValueError("Characteristic UUID not found in current Home")
         return normalize(scalar, chars[identifier])
@@ -391,7 +407,7 @@ def tool_definitions():
     definitions = [
         {"name": "home_inventory", "description": "Read current HomeKit configuration with UUIDs, automation events, predicate conditions, timing/recurrence rules, and attached actions. Unsupported public-API details are marked. Characteristic values are cached, not fresh sensor reads.",
          "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False}},
-        {"name": "home_change_execute", "description": "Execute one HomeKit change automatically in a app-authorized connection session. A durable checksum-verified inventory backup and write-ahead receipt are required before submission; returns backupID and recovery assessment. update_scene replaces ALL existing scene actions. create_timer and create_event_automation default to disabled. Event/condition arrays replace existing rules; conditions are declarative all/any/not/characteristic/presence trees. additionalConditions ANDs with the existing native predicate without reconstructing or dropping any clause. Updates disable the automation while editing; failures may leave it disabled. delete_scene and delete_automation require objectID and accept no other change fields. Deletion is permanent and backed up first. Automation deletion keeps shared scenes; its HomeKit-owned actions belong to the deleted rule. Scenes referenced by any automation or owned by HomeKit cannot be deleted.",
+        {"name": "home_change_execute", "description": "Execute one HomeKit change automatically in a app-authorized connection session. A durable checksum-verified inventory backup and write-ahead receipt are required before submission; returns backupID and recovery assessment. update_scene replaces ALL existing scene actions. create_timer and create_event_automation default to disabled. Event/condition arrays replace existing rules; conditions are declarative all/any/not/characteristic/presence trees. additionalConditions ANDs with the existing native predicate without reconstructing or dropping any clause. Updates disable the automation while editing; failures may leave it disabled. delete_scene and delete_automation require objectID and accept no other change fields. Deletion is permanent and backed up first. Automation deletion keeps shared scenes; its HomeKit-owned actions belong to the deleted rule. Scenes referenced by any automation or owned by HomeKit cannot be deleted. remove_bridge requires complete bridgedAccessoryIDs and auditedOpaqueSceneIDs lists, rejects remaining scene/group/native-rule references, and permanently removes the bridge pairing and children without an automatic inverse.",
          "inputSchema": {"type": "object", "required": ["operation", "homeID"],
                          "additionalProperties": False, "$defs": {"condition": condition}, "properties": {
                              "operation": {"type": "string", "enum": OPERATIONS},
@@ -404,7 +420,7 @@ def tool_definitions():
                                  "characteristicID": {"type": "string", "format": "uuid"},
                                  "value": {"type": ["boolean", "number", "string"]}}}},
                              "sceneIDs": {"type": "array", "items": {"type": "string", "format": "uuid"}},
-                             **{field: {"type": "array", "maxItems": 512, "uniqueItems": True, "items": {"type": "string", "format": "uuid"}} for field in ("serviceIDs", "addServiceIDs", "removeServiceIDs", "roomIDs", "addRoomIDs", "removeRoomIDs", "removeActionIDs")},
+                             **{field: {"type": "array", "maxItems": 512, "uniqueItems": True, "items": {"type": "string", "format": "uuid"}} for field in ("serviceIDs", "addServiceIDs", "removeServiceIDs", "roomIDs", "addRoomIDs", "removeRoomIDs", "removeActionIDs", "bridgedAccessoryIDs", "auditedOpaqueSceneIDs")},
                              "actionUpdates": {"type": "array", "maxItems": 512, "items": {"type": "object", "additionalProperties": False, "required": ["actionID", "value"], "properties": {"actionID": {"type": "string", "format": "uuid"}, "value": scalar}}},
                              "referenceMappings": {"type": "array", "minItems": 1, "maxItems": 64, "items": {"type": "object", "additionalProperties": False, "required": ["sourceID", "targetID"], "properties": {"sourceID": {"type": "string", "format": "uuid"}, "targetID": {"type": "string", "format": "uuid"}}}},
                              "fireDate": {"type": "string", "description": "Future ISO 8601 UTC date, e.g. 2026-10-07T12:00:00Z"},
@@ -455,7 +471,7 @@ def tool_definitions():
 def dispatch(client, method, params):
     if method == "initialize":
         return {"protocolVersion": params.get("protocolVersion", "2024-11-05"),
-                "capabilities": {"tools": {}}, "serverInfo": {"name": "homekitten-usb", "version": "1.5.0"}}
+                "capabilities": {"tools": {}}, "serverInfo": {"name": "homekitten-usb", "version": "1.6.0"}}
     if method == "ping":
         return {}
     if method == "tools/list":
