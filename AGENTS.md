@@ -96,7 +96,8 @@ client changes; use the current CLI until the new tools are available.
 
 The current tools are `home_inventory`, `home_change_execute`,
 `home_change_result`, `home_read_characteristics`, `home_read_result`,
-`home_backup_create`, `home_backup_list`, `home_restore_preview`, and `home_restore_apply`.
+`home_backup_create`, `home_backup_list`, `home_restore_preview`, `home_restore_apply`,
+and `home_migration_plan`.
 Live reads use separate queues and work in read-only sessions. They return
 per-characteristic timestamps or errors/timeouts, never a cached fallback.
 The old `home_change_propose` name is accepted as an alias
@@ -201,3 +202,18 @@ Still outstanding: a user-selected live write and physical/result verification,
 wireless paired-device transport, and live background-expiration/foreground-resume
 testing. Do not present those as already verified. Extend capabilities only when
 requested; do not make arbitrary Home changes as a fresh-session smoke test.
+
+## Staged migration extensions
+
+For accessory migration, read [docs/STAGED_MIGRATION.md](docs/STAGED_MIGRATION.md).
+Use hardware identity and exact UUIDs, add counterparts first and independently
+verify before removal. Prefer `patch_scene` for all migration actions, including
+built-in and trigger-owned sets; never use replace-all to reconstruct hidden
+internals. Group/zone membership changes preserve object UUIDs and incremental
+unrelated members. Native reference remapping retains unsupported unrelated native
+clauses, but source-bearing opaque expressions reject and hidden shortcut data
+remains unknown. Keep original references until physical parity and all rule/
+hidden/reachability gates pass; plan generation cannot authorize retirement.
+Mac-only extension releases follow the expressly requested signed Mac installation;
+a signed generic iOS build validates source without installing to another device.
+The enrolled identity, permission settings, bundle ID and existing pairings remain.

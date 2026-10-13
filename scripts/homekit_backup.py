@@ -252,12 +252,55 @@ def restore_request(saved, current, home, kind, fields=None):
 
 
 
-def recovery_scope(request, identifier):
+
+def scene_patch_recovery(saved, current, home, identifiers=None):
+    from homekit_migration import characteristics, normalize, WRITABLE
+    chars = characteristics(home)
+    def index(scene):
+        result = {}
+        for action in scene["actions"]:
+            if action.get("kind") != "characteristicWrite" or action.get("supported") is False: continue
+            key = action["characteristicID"]
+            if identifiers is not None and key not in identifiers: continue
+            if key in result: raise ValueError("Duplicate scalar scene actions require manual resolution")
+            if key not in chars or WRITABLE not in chars[key]['properties']: raise ValueError("Writable characteristic UUID missing")
+            result[key] = dict(action, value=normalize(action["value"], chars[key]))
+        return result
+    desired, now = index(saved), index(current)
+    # Every unsupported/hidden action remains untouched. Only exact scalar IDs are removed/updated.
+    request = {"operation": "patch_scene", "homeID": home["id"], "objectID": saved["id"]}
+    added, removed, updates = [], [], []
+    for key, action in desired.items():
+        if key not in now: added.append({"characteristicID": key, "value": action["value"]})
+        elif action["value"] != now[key]["value"]:
+            if not now[key].get("id"): raise ValueError("Refresh current inventory with incremental action IDs before recovery")
+            updates.append({"actionID": now[key]["id"], "value": action["value"]})
+    for key, action in now.items():
+        if key not in desired:
+            if not action.get("id"): raise ValueError("Current scalar action ID unavailable")
+            removed.append(action["id"])
+    if added: request["actions"] = added
+    if removed: request["removeActionIDs"] = removed
+    if updates: request["actionUpdates"] = updates
+    return request if len(request) > 3 else None
+
+
+def recovery_scope(request, identifier, inventory=None):
     operation = request["operation"]
     choices = {"rename_accessory": ("accessory", ["name"]), "assign_accessory": ("accessory", ["roomID"]),
                "set_characteristic": ("characteristic", ["value"]), "rename_scene": ("scene", ["name"]),
                "update_scene": ("scene", [key for key in ("name", "actions") if key in request]),
                "update_automation": ("automation", [key for key in ("name", "enabled", "sceneIDs", "events", "endEvents", "conditions", "additionalConditions", "clearConditions", "recurrenceWeekdays", "executeOnce") if key in request])}
+    choices.update({"update_group": ("group", [k for k in ("name", "serviceIDs") if k == "name" and k in request or k == "serviceIDs" and any(f in request for f in ("serviceIDs", "addServiceIDs", "removeServiceIDs"))]),
+                    "update_zone": ("zone", [k for k in ("name", "roomIDs") if k == "name" and k in request or k == "roomIDs" and any(f in request for f in ("roomIDs", "addRoomIDs", "removeRoomIDs"))]),
+                    "rename_room": ("room", ["name"])})
+    if operation == "patch_scene":
+        home = find((inventory or {}).get("homes", []), request["homeID"])
+        scene = find(home["scenes"], request["objectID"])
+        touched_ids = set(request.get("removeActionIDs", [])) | {u["actionID"] for u in request.get("actionUpdates", [])}
+        touched = {a["characteristicID"] for a in scene["actions"] if a.get("id") in touched_ids and a.get("kind") == "characteristicWrite"}
+        touched.update(a["characteristicID"] for a in request.get("actions", []))
+        return {"identifier": identifier, "home_id": request["homeID"], "kind": "scene_patch", "object_id": request["objectID"], "fields": ["actions"], "characteristic_ids": sorted(touched)}
     if operation not in choices:
         return {"state": "manual", "reason": "Creation, deletion and scene execution have no automatic inverse; inspect the saved configuration before recovery."}
     kind, fields = choices[operation]
@@ -266,12 +309,15 @@ def recovery_scope(request, identifier):
     return {"identifier": identifier, "home_id": request["homeID"], "kind": kind, "object_id": request["objectID"], "fields": fields}
 
 
-def plan(store, client, identifier, home_id, kind, object_id, fields=None):
+def plan(store, client, identifier, home_id, kind, object_id, fields=None, characteristic_ids=None):
     allowed = {"accessory": {"name", "roomID"}, "scene": {"name", "actions"},
                "automation": {"name", "enabled", "sceneIDs", "events", "endEvents", "conditions", "additionalConditions", "clearConditions", "recurrenceWeekdays", "executeOnce"},
-               "characteristic": {"value"}}
+               "characteristic": {"value"}, "group": {"name", "serviceIDs"}, "zone": {"name", "roomIDs"},
+               "room": {"name"}, "scene_patch": {"actions"}}
     if kind not in allowed or (fields is not None and (not isinstance(fields, list) or not fields or not set(fields) <= allowed[kind])):
         raise ValueError("Invalid recovery kind or fields")
+    if characteristic_ids is not None and (kind != "scene_patch" or not isinstance(characteristic_ids, list) or not characteristic_ids or len(set(characteristic_ids)) != len(characteristic_ids)):
+        raise ValueError("characteristic_ids requires a unique nonempty scene_patch scope")
     record = store.load(identifier)
     saved_home = find(record["inventory"]["homes"], home_id)
     current = client.inventory()
@@ -289,6 +335,30 @@ def plan(store, client, identifier, home_id, kind, object_id, fields=None):
         basis = {"backupID": identifier, "homeID": home_id, "objectID": object_id, "fields": fields, "kind": kind, "value": current_value, "requests": requests}
         return {"backupID": identifier, "homeID": home_id, "kind": kind, "objectID": object_id, "fields": fields,
                 "requests": requests, "blocked": [], "planToken": hashlib.sha256(encoded(basis)).hexdigest(), "state": "preview", "limitations": record["limitations"]}
+    if kind in ("group", "zone", "room", "scene_patch"):
+        collection = {"group": "groups", "zone": "zones", "room": "rooms", "scene_patch": "scenes"}[kind]
+        saved, present = find(saved_home[collection], object_id), find(home[collection], object_id)
+        requests, blocked = [], []
+        try:
+            if kind == "scene_patch":
+                request = scene_patch_recovery(saved, present, home, characteristic_ids)
+                if request: requests.append(request)
+            else:
+                request = {"operation": {"group": "update_group", "zone": "update_zone", "room": "rename_room"}[kind], "homeID": home_id, "objectID": object_id}
+                if (fields is None or "name" in fields) and saved["name"] != present["name"]: request["name"] = saved["name"]
+                membership_field = {"group": "serviceIDs", "zone": "roomIDs"}.get(kind)
+                if membership_field and (fields is None or membership_field in fields):
+                    available = {s["id"] for a in home["accessories"] for s in a["services"]} if kind == "group" else {r["id"] for r in home["rooms"]}
+                    if not set(saved[membership_field]) <= available: raise ValueError("Saved membership UUID unavailable; no partial recovery")
+                    if set(saved[membership_field]) != set(present[membership_field]): request[membership_field] = saved[membership_field]
+                if len(request) > 3: requests.append(request)
+        except (ValueError, KeyError, TypeError) as error:
+            requests, blocked = [], [str(error)]
+        basis = {"backupID": identifier, "homeID": home_id, "kind": kind, "objectID": object_id, "fields": fields,
+                 "characteristic_ids": characteristic_ids, "current": present, "requests": requests, "blocked": blocked}
+        return {"backupID": identifier, "homeID": home_id, "kind": kind, "objectID": object_id, "fields": fields,
+                "characteristic_ids": characteristic_ids, "requests": requests, "blocked": blocked,
+                "planToken": hashlib.sha256(encoded(basis)).hexdigest(), "state": "blocked" if blocked else "preview", "limitations": record["limitations"]}
     collection = {"accessory": "accessories", "scene": "scenes", "automation": "automations"}[kind]
     saved = find(saved_home[collection], object_id)
     present = find(home[collection], object_id)

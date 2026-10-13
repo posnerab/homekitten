@@ -138,3 +138,14 @@ snapshot, not a guarantee about subsequent configuration. Tests additionally
 simulate changed-state recovery, storage failure, stale previews, missing UUIDs,
 unsupported rules, uncertain transfer and stop-on-failure behavior. No live device
 or rule was deliberately changed to test rollback.
+
+## Migration recovery extension
+
+The signed migration app/client adds group/zone membership, room-name recovery,
+and scalar incremental recovery of built-in/owned scene actions without replacing
+hidden or unrelated actions. See [migration recovery](STAGED_MIGRATION.md#recovery-additions)
+for `group`, `zone`, `room`, `scene_patch` kinds and characteristic scope. The
+original coverage table above describes the replace-all recovery path; new
+incremental recovery does not reconstruct hidden internals. Native automation
+reference mapping preserves clauses in place, but does not promise automatic
+recovery of every unsupported rule. Creation/deletion and pairing limits remain.

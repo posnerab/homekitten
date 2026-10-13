@@ -110,7 +110,7 @@ class AgentTests(unittest.TestCase):
         client = agent.Client("device")
         with self.assertRaises(ValueError):
             client.submit({"operation": "approve"})
-        self.assertEqual([t["name"] for t in agent.tool_definitions()], ["home_inventory", "home_change_execute", "home_change_result", "home_read_characteristics", "home_read_result", "home_backup_create", "home_backup_list", "home_restore_preview", "home_restore_apply"])
+        self.assertEqual([t["name"] for t in agent.tool_definitions()], ["home_inventory", "home_change_execute", "home_change_result", "home_read_characteristics", "home_read_result", "home_backup_create", "home_backup_list", "home_restore_preview", "home_restore_apply", "home_migration_plan"])
 
     def test_read_only_session_cannot_send_changes(self):
         client = agent.Client("device")
@@ -201,7 +201,7 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(sent[0]["conditions"]["kind"], "all")
         self.assertEqual([e["value"] for e in sent[0]["events"]], [False, False])
         self.assertEqual([c["value"] for c in sent[0]["conditions"]["children"]], [False, False])
-        self.assertEqual(sent[0]["sceneIDs"], request["sceneIDs"])
+        self.assertEqual(sent[0]["sceneIDs"], [value.upper() for value in request["sceneIDs"]])
         self.assertEqual(json.dumps(request), original)
 
     def test_additive_conditions_require_capability_and_reject_replacement(self):

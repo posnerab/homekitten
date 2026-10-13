@@ -30,12 +30,12 @@ enum AutomationInventory {
     }
 
     static func actionSet(_ scene: HMActionSet) -> [String: Any] {
-        let actions: [[String: Any]] = scene.actions.map { action in
+        let actions: [[String: Any]] = scene.actions.sorted { $0.uniqueIdentifier.uuidString < $1.uniqueIdentifier.uuidString }.map { action in
             if let write = action as? HMCharacteristicWriteAction<NSCopying> {
-                return ["kind": "characteristicWrite", "characteristicID": write.characteristic.uniqueIdentifier.uuidString,
+                return ["id": action.uniqueIdentifier.uuidString, "kind": "characteristicWrite", "characteristicID": write.characteristic.uniqueIdentifier.uuidString,
                         "value": AutomationRules.value(write.targetValue, object: object)]
             }
-            return ["kind": String(describing: type(of: action)), "supported": false]
+            return ["id": action.uniqueIdentifier.uuidString, "kind": String(describing: type(of: action)), "supported": false]
         }
         return ["id": scene.uniqueIdentifier.uuidString, "name": scene.name,
                 "type": scene.actionSetType, "actions": actions]

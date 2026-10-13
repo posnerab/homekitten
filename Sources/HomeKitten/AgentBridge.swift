@@ -29,6 +29,16 @@ enum AgentValue: Codable, Sendable, Equatable {
     }
 }
 
+struct AgentActionUpdate: Codable, Sendable {
+    let actionID: UUID
+    let value: AgentValue
+}
+
+struct AgentReferenceMapping: Codable, Sendable {
+    let sourceID: UUID
+    let targetID: UUID
+}
+
 struct AgentAction: Codable, Sendable {
     let characteristicID: UUID
     let value: AgentValue
@@ -69,6 +79,15 @@ struct AgentRequest: Codable, Identifiable, Sendable {
     let value: AgentValue?
     let actions: [AgentAction]?
     let sceneIDs: [UUID]?
+    let serviceIDs: [UUID]?
+    let addServiceIDs: [UUID]?
+    let removeServiceIDs: [UUID]?
+    let roomIDs: [UUID]?
+    let addRoomIDs: [UUID]?
+    let removeRoomIDs: [UUID]?
+    let removeActionIDs: [UUID]?
+    let actionUpdates: [AgentActionUpdate]?
+    let referenceMappings: [AgentReferenceMapping]?
     let fireDate: Date?
     let recurrenceMinutes: Int?
     let enabled: Bool?
@@ -79,6 +98,11 @@ struct AgentRequest: Codable, Identifiable, Sendable {
     let clearConditions: Bool?
     let recurrenceWeekdays: [Int]?
     let executeOnce: Bool?
+
+    func canonicalData() throws -> Data {
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        return try encoder.encode(self)
+    }
 
     var changesEventRules: Bool {
         events != nil || endEvents != nil || conditions != nil || additionalConditions != nil || clearConditions != nil || recurrenceWeekdays != nil || executeOnce != nil
@@ -240,6 +264,12 @@ final class AgentBridge {
             let encoder = JSONEncoder(); encoder.dateEncodingStrategy = .iso8601
             try encoder.encode(HomeBackupService.makeBackup(home: home))
                 .write(to: directory.appendingPathComponent("backups/\(request.id.uuidString).json"), options: .atomic)
+            // Preserve full public rule/action evidence for every operation, including owned action sets.
+            try write(["homeID": home.uniqueIdentifier.uuidString, "scenes": allActionSets(home).map { AutomationInventory.actionSet($0) },
+                       "automations": home.triggers.map { AutomationInventory.trigger($0) },
+                       "groups": home.serviceGroups.map { ["id": $0.uniqueIdentifier.uuidString, "serviceIDs": $0.services.map { $0.uniqueIdentifier.uuidString }] },
+                       "zones": home.zones.map { ["id": $0.uniqueIdentifier.uuidString, "roomIDs": $0.rooms.map { $0.uniqueIdentifier.uuidString }] }],
+                      to: "backups/\(request.id.uuidString).configuration.json")
             let result = try await execute(request, home: home)
             respond(request, state: "completed", message: result)
             if running { try publish(store) }
@@ -324,7 +354,7 @@ final class AgentBridge {
         return c
     }
     private func scene(_ id: UUID?, in home: HMHome) throws -> HMActionSet {
-        guard let id, let scene = home.actionSets.first(where: { $0.uniqueIdentifier == id }) else { throw failure("Scene UUID not found") }
+        guard let id, let scene = allActionSets(home).first(where: { $0.uniqueIdentifier == id }) else { throw failure("Scene UUID not found") }
         return scene
     }
     private func trigger(_ id: UUID?, in home: HMHome) throws -> HMTrigger {
@@ -337,7 +367,7 @@ final class AgentBridge {
     }
     private func validate(_ value: AgentValue, for c: HMCharacteristic) throws {
         let format = c.metadata?.format
-        switch value {
+        switch AgentScalar.normalized(value, format: format) {
         case .bool: guard format == HMCharacteristicMetadataFormatBool else { throw failure("Expected numeric or string value") }
         case .string: guard format == HMCharacteristicMetadataFormatString else { throw failure("String unsupported for this characteristic") }
         case .number(let number):
@@ -371,7 +401,7 @@ final class AgentBridge {
                 let c = try readableCharacteristic(spec.characteristicID, in: home, notifying: true)
                 guard let value = spec.value else { throw failure("Characteristic event requires value") }
                 try validate(value, for: c)
-                return HMCharacteristicEvent<NSCopying>(characteristic: c, triggerValue: value.value)
+                return HMCharacteristicEvent<NSCopying>(characteristic: c, triggerValue: AgentScalar.normalized(value, format: c.metadata?.format).value)
             case "calendar":
                 guard let hour = spec.hour, (0...23).contains(hour), let minute = spec.minute, (0...59).contains(minute) else { throw failure("Calendar event requires hour 0–23 and minute 0–59") }
                 return HMCalendarEvent(fire: DateComponents(hour: hour, minute: minute))
@@ -409,8 +439,8 @@ final class AgentBridge {
             try validate(value, for: c)
             let operators: [String: NSComparisonPredicate.Operator] = ["equal": .equalTo, "not_equal": .notEqualTo, "less_than": .lessThan, "greater_than": .greaterThan, "at_most": .lessThanOrEqualTo, "at_least": .greaterThanOrEqualTo]
             guard let comparison = operators[spec.comparison ?? "equal"] else { throw failure("Unsupported condition comparison") }
-            if case .number = value {} else if !["equal", "not_equal"].contains(spec.comparison ?? "equal") { throw failure("Ordering requires a numeric characteristic") }
-            return HMEventTrigger.predicateForEvaluatingTrigger(c, relatedBy: comparison, toValue: value.value)
+            if case .number = AgentScalar.normalized(value, format: c.metadata?.format) {} else if !["equal", "not_equal"].contains(spec.comparison ?? "equal") { throw failure("Ordering requires a numeric characteristic") }
+            return HMEventTrigger.predicateForEvaluatingTrigger(c, relatedBy: comparison, toValue: AgentScalar.normalized(value, format: c.metadata?.format).value)
         }
         guard ["all", "any", "not"].contains(spec.kind), spec.characteristicID == nil, spec.value == nil, spec.comparison == nil,
               let children = spec.children, !children.isEmpty, children.count <= 32, spec.kind != "not" || children.count == 1 else { throw failure("Use all/any with 1–32 children or not with one child") }
@@ -448,6 +478,11 @@ final class AgentBridge {
 
     private func describe(_ r: AgentRequest) throws -> String {
         let home = try resolveHome(r)
+        let extensions = ["create_group", "update_group", "create_zone", "update_zone", "rename_room", "patch_scene", "remap_automation_references"]
+        if extensions.contains(r.operation) { return try describeExtension(r, home: home) }
+        guard r.serviceIDs == nil, r.addServiceIDs == nil, r.removeServiceIDs == nil, r.roomIDs == nil,
+              r.addRoomIDs == nil, r.removeRoomIDs == nil, r.removeActionIDs == nil, r.actionUpdates == nil,
+              r.referenceMappings == nil else { throw failure("Extension fields require the matching operation") }
         if r.operation == "delete_scene" || r.operation == "delete_automation" {
             guard r.objectID != nil, r.roomID == nil, r.name == nil, r.value == nil,
                   r.actions == nil, r.sceneIDs == nil, r.fireDate == nil, r.recurrenceMinutes == nil,
@@ -483,6 +518,7 @@ final class AgentBridge {
         case "create_scene", "update_scene":
             if r.operation == "update_scene" {
                 let scene = try scene(r.objectID, in: home)
+                guard scene.actionSetType == HMActionSetTypeUserDefined else { throw failure("Built-in/owned action sets require incremental patch_scene") }
                 text += "Replace all \(scene.actions.count) actions in \(scene.name)\n"
                 text += "Current actions:\n"
                 for action in scene.actions {
@@ -503,7 +539,9 @@ final class AgentBridge {
             }
             if r.name != nil { _ = try newName(r) }
         case "rename_scene", "run_scene":
-            text += "Scene: \(try scene(r.objectID, in: home).name)"
+            let target = try scene(r.objectID, in: home)
+            guard target.actionSetType != HMActionSetTypeTriggerOwned else { throw failure("Owned action sets cannot be renamed or executed") }
+            text += "Scene: \(target.name)"
             if r.operation == "rename_scene" { text += " → \(try newName(r))" }
         case "create_timer":
             let name = try newName(r)
@@ -546,6 +584,9 @@ final class AgentBridge {
     }
 
     private func execute(_ r: AgentRequest, home: HMHome) async throws -> String {
+        if ["create_group", "update_group", "create_zone", "update_zone", "rename_room", "patch_scene", "remap_automation_references"].contains(r.operation) {
+            return try await executeExtension(r, home: home)
+        }
         switch r.operation {
         case "delete_scene":
             let target = try scene(r.objectID, in: home)
@@ -576,7 +617,7 @@ final class AgentBridge {
             try await a.updateName(newName(r))
         case "set_characteristic":
             let c = try characteristic(r.objectID, in: home)
-            try await c.writeValue(r.value!.value)
+            try await c.writeValue(AgentScalar.normalized(r.value!, format: c.metadata?.format).value)
             if c.properties.contains(HMCharacteristicPropertyReadable) {
                 try await c.readValue()
                 return "Write completed; read-back: \(String(describing: c.value ?? "unknown"))"
@@ -592,7 +633,7 @@ final class AgentBridge {
             }
             for action in r.actions! {
                 let c = try characteristic(action.characteristicID, in: home)
-                try await target.addAction(HMCharacteristicWriteAction<NSCopying>(characteristic: c, targetValue: action.value.value))
+                try await target.addAction(HMCharacteristicWriteAction<NSCopying>(characteristic: c, targetValue: AgentScalar.normalized(action.value, format: c.metadata?.format).value))
             }
             return "Scene saved: \(target.uniqueIdentifier)"
         case "rename_scene": try await scene(r.objectID, in: home).updateName(newName(r))
@@ -662,6 +703,211 @@ final class AgentBridge {
         }
     }
 
+    private func allActionSets(_ home: HMHome) -> [HMActionSet] {
+        Array(Dictionary(grouping: home.actionSets + home.triggers.flatMap(\.actionSets), by: \.uniqueIdentifier).values.compactMap(\.first))
+    }
+    private func service(_ id: UUID, home: HMHome) throws -> HMService {
+        guard let value = home.accessories.flatMap(\.services).first(where: { $0.uniqueIdentifier == id }) else { throw failure("Service UUID not found in this Home") }
+        return value
+    }
+    private func membership(_ existing: [UUID], replacement: [UUID]?, additions: [UUID]?, removals: [UUID]?) throws -> Set<UUID> {
+        try AgentMembership.desired(existing, replacement: replacement, additions: additions, removals: removals)
+    }
+
+    private func scalarAction(_ id: UUID, scene: HMActionSet) throws -> HMCharacteristicWriteAction<NSCopying> {
+        guard let action = scene.actions.first(where: { $0.uniqueIdentifier == id }) as? HMCharacteristicWriteAction<NSCopying> else { throw failure("Scalar action UUID not found; hidden actions cannot be edited") }
+        return action
+    }
+    private func extensionFields(_ r: AgentRequest) throws {
+        guard r.value == nil, r.sceneIDs == nil, r.fireDate == nil, r.recurrenceMinutes == nil,
+              r.enabled == nil, !r.changesEventRules, r.roomID == nil else { throw failure("Unrelated fields are not accepted") }
+        let group = r.operation.contains("group"), zone = r.operation.contains("zone"), patch = r.operation == "patch_scene", remap = r.operation == "remap_automation_references"
+        guard group || (r.serviceIDs == nil && r.addServiceIDs == nil && r.removeServiceIDs == nil),
+              zone || (r.roomIDs == nil && r.addRoomIDs == nil && r.removeRoomIDs == nil),
+              patch || (r.actions == nil && r.actionUpdates == nil && r.removeActionIDs == nil),
+              remap || r.referenceMappings == nil else { throw failure("Fields require their matching operation") }
+        if patch || remap { guard r.name == nil else { throw failure("Incremental operations do not rename objects") } }
+    }
+    private func nativeMap(_ r: AgentRequest, home: HMHome) throws -> [UUID: HMCharacteristic] {
+        guard let pairs = r.referenceMappings, !pairs.isEmpty, pairs.count <= 64,
+              Set(pairs.map(\.sourceID)).count == pairs.count, Set(pairs.map(\.targetID)).count == pairs.count else { throw failure("Provide 1–64 unique source/target characteristic pairs") }
+        let all = home.accessories.flatMap(\.services).flatMap(\.characteristics)
+        var result: [UUID: HMCharacteristic] = [:]
+        for pair in pairs {
+            guard pair.sourceID != pair.targetID, !pairs.contains(where: { $0.sourceID == pair.targetID }),
+                  let old = all.first(where: { $0.uniqueIdentifier == pair.sourceID }),
+                  let new = all.first(where: { $0.uniqueIdentifier == pair.targetID }), old.characteristicType == new.characteristicType,
+                  old.metadata?.format == new.metadata?.format,
+                  new.properties.contains(HMCharacteristicPropertyReadable), new.properties.contains(HMCharacteristicPropertySupportsEventNotification) else { throw failure("Reference mapping requires same-type, same-format readable notifying characteristics; chains are rejected") }
+            if let min = old.metadata?.minimumValue { guard let next = new.metadata?.minimumValue, next.doubleValue <= min.doubleValue else { throw failure("Target reference range does not cover source minimum") } }
+            if let max = old.metadata?.maximumValue { guard let next = new.metadata?.maximumValue, next.doubleValue >= max.doubleValue else { throw failure("Target reference range does not cover source maximum") } }
+            guard old.metadata?.units == new.metadata?.units, old.metadata?.stepValue == new.metadata?.stepValue else { throw failure("Reference units/step mismatch") }
+            if let choices = old.metadata?.validValues, !choices.isEmpty {
+                guard let targetChoices = new.metadata?.validValues, Set(choices).isSubset(of: Set(targetChoices)) else { throw failure("Target choices do not cover source choices") }
+            }
+            result[pair.sourceID] = new
+        }
+        return result
+    }
+    private func describeExtension(_ r: AgentRequest, home: HMHome) throws -> String {
+        try extensionFields(r)
+        var evidence: [String: Any] = ["operation": r.operation, "homeID": home.uniqueIdentifier.uuidString]
+        switch r.operation {
+        case "create_group", "create_zone":
+            let name = try newName(r)
+            guard r.objectID == nil, r.addServiceIDs == nil, r.removeServiceIDs == nil, r.addRoomIDs == nil, r.removeRoomIDs == nil else { throw failure("Creation accepts a name and optional complete membership only") }
+            if r.operation == "create_group" {
+                guard !home.serviceGroups.contains(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame }) else { throw failure("Group name exists") }
+                _ = try membership([], replacement: r.serviceIDs, additions: nil, removals: nil)
+                for id in r.serviceIDs ?? [] { _ = try service(id, home: home) }
+            } else {
+                guard !home.zones.contains(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame }) else { throw failure("Zone name exists") }
+                _ = try membership([], replacement: r.roomIDs, additions: nil, removals: nil)
+                for id in r.roomIDs ?? [] { guard home.rooms.contains(where: { $0.uniqueIdentifier == id }) else { throw failure("Room UUID not found") } }
+            }
+            evidence["name"] = name
+        case "update_group":
+            guard let group = home.serviceGroups.first(where: { $0.uniqueIdentifier == r.objectID }), r.name != nil || r.serviceIDs != nil || r.addServiceIDs != nil || r.removeServiceIDs != nil else { throw failure("Group UUID and change required") }
+            let desired = try membership(group.services.map(\.uniqueIdentifier), replacement: r.serviceIDs, additions: r.addServiceIDs, removals: r.removeServiceIDs)
+            for id in desired { _ = try service(id, home: home) }
+            if r.name != nil { _ = try newName(r) }
+            evidence["current"] = group.services.map { $0.uniqueIdentifier.uuidString }.sorted()
+            evidence["desired"] = desired.map(\.uuidString).sorted(); evidence["name"] = group.name
+        case "update_zone":
+            guard let zone = home.zones.first(where: { $0.uniqueIdentifier == r.objectID }), r.name != nil || r.roomIDs != nil || r.addRoomIDs != nil || r.removeRoomIDs != nil else { throw failure("Zone UUID and change required") }
+            let desired = try membership(zone.rooms.map(\.uniqueIdentifier), replacement: r.roomIDs, additions: r.addRoomIDs, removals: r.removeRoomIDs)
+            for id in desired { guard home.rooms.contains(where: { $0.uniqueIdentifier == id }) else { throw failure("Room UUID not found") } }
+            if r.name != nil { _ = try newName(r) }
+            evidence["current"] = zone.rooms.map { $0.uniqueIdentifier.uuidString }.sorted()
+            evidence["desired"] = desired.map(\.uuidString).sorted(); evidence["name"] = zone.name
+        case "rename_room":
+            guard let room = home.rooms.first(where: { $0.uniqueIdentifier == r.objectID }) else { throw failure("Room UUID not found") }
+            evidence["currentName"] = room.name; evidence["name"] = try newName(r)
+        case "patch_scene":
+            let target = try scene(r.objectID, in: home)
+            guard !(r.actions ?? []).isEmpty || !(r.removeActionIDs ?? []).isEmpty || !(r.actionUpdates ?? []).isEmpty else { throw failure("Patch requires additions, scalar updates or scalar removals") }
+            let removed = Set(r.removeActionIDs ?? []), updated = Set((r.actionUpdates ?? []).map(\.actionID))
+            guard removed.count == (r.removeActionIDs ?? []).count, updated.count == (r.actionUpdates ?? []).count, removed.isDisjoint(with: updated),
+                  Set((r.actions ?? []).map(\.characteristicID)).count == (r.actions ?? []).count,
+                  (r.actions ?? []).count + removed.count + updated.count <= 512 else { throw failure("Duplicate/overlapping action targets or patch too large") }
+            for id in removed { _ = try scalarAction(id, scene: target) }
+            for update in r.actionUpdates ?? [] { let action = try scalarAction(update.actionID, scene: target); try validate(update.value, for: characteristic(action.characteristic.uniqueIdentifier, in: home)) }
+            for spec in r.actions ?? [] {
+                let c = try characteristic(spec.characteristicID, in: home); try validate(spec.value, for: c)
+                let existing = target.actions.compactMap { $0 as? HMCharacteristicWriteAction<NSCopying> }.filter { $0.characteristic.uniqueIdentifier == c.uniqueIdentifier }
+                guard existing.isEmpty || (existing.count == 1 && !removed.contains(existing[0].uniqueIdentifier) && !updated.contains(existing[0].uniqueIdentifier) && scalarEqual(existing[0].targetValue, AgentScalar.normalized(spec.value, format: c.metadata?.format).value)) else { throw failure("Characteristic already has a different/overlapping action; use its exact actionID for update") }
+            }
+            evidence["current"] = AutomationInventory.actionSet(target)
+        case "remap_automation_references":
+            guard let target = try trigger(r.objectID, in: home) as? HMEventTrigger else { throw failure("Reference remapping requires an event automation") }
+            let map = try nativeMap(r, home: home)
+            _ = try NativeReferenceRemap.events(target.events, mapping: map)
+            _ = try NativeReferenceRemap.events(target.endEvents, mapping: map)
+            _ = try target.predicate.map { try NativeReferenceRemap.predicate($0, mapping: map) }
+            evidence["current"] = AutomationInventory.trigger(target)
+        default: throw failure("Unsupported operation")
+        }
+        evidence["request"] = String(decoding: try r.canonicalData(), as: UTF8.self)
+        return String(decoding: try JSONSerialization.data(withJSONObject: evidence, options: [.sortedKeys]), as: UTF8.self)
+    }
+    private func scalarEqual(_ left: NSCopying, _ right: NSCopying) -> Bool {
+        (left as? NSObject)?.isEqual(right) == true
+    }
+    private func executeExtension(_ r: AgentRequest, home: HMHome) async throws -> String {
+        // describeExtension validated the entire patch before this first mutation.
+        switch r.operation {
+        case "rename_room":
+            let room = home.rooms.first { $0.uniqueIdentifier == r.objectID }!
+            let name = try newName(r); if room.name != name { try await room.updateName(name) }
+            guard room.name == name else { throw failure("Room rename read-back failed") }
+        case "create_group", "update_group":
+            let group: HMServiceGroup
+            if r.operation == "create_group" { let name = try newName(r)
+                group = try await withCheckedThrowingContinuation { continuation in
+                    home.addServiceGroup(withName: name) { value, error in
+                        if let error { continuation.resume(throwing: error) }
+                        else if let value { continuation.resume(returning: value) }
+                        else { continuation.resume(throwing: self.failure("Group creation returned no object")) }
+                    }
+                } }
+            else { group = home.serviceGroups.first { $0.uniqueIdentifier == r.objectID }! }
+            let desired = try membership(group.services.map(\.uniqueIdentifier), replacement: r.serviceIDs, additions: r.addServiceIDs, removals: r.removeServiceIDs)
+            for id in desired where !group.services.contains(where: { $0.uniqueIdentifier == id }) { try await group.addService(service(id, home: home)) }
+            for member in group.services where !desired.contains(member.uniqueIdentifier) { try await group.removeService(member) }
+            let requestedName = try r.name.map { _ in try newName(r) }
+            if let requestedName, group.name != requestedName { try await group.updateName(requestedName) }
+            guard Set(group.services.map(\.uniqueIdentifier)) == desired, requestedName == nil || group.name == requestedName else { throw failure("Group membership/name read-back failed") }
+            return "Group verified: \(group.uniqueIdentifier)"
+        case "create_zone", "update_zone":
+            let zone: HMZone
+            if r.operation == "create_zone" { let name = try newName(r)
+                zone = try await withCheckedThrowingContinuation { continuation in
+                    home.addZone(withName: name) { value, error in
+                        if let error { continuation.resume(throwing: error) }
+                        else if let value { continuation.resume(returning: value) }
+                        else { continuation.resume(throwing: self.failure("Zone creation returned no object")) }
+                    }
+                } }
+            else { zone = home.zones.first { $0.uniqueIdentifier == r.objectID }! }
+            let desired = try membership(zone.rooms.map(\.uniqueIdentifier), replacement: r.roomIDs, additions: r.addRoomIDs, removals: r.removeRoomIDs)
+            for id in desired where !zone.rooms.contains(where: { $0.uniqueIdentifier == id }) { try await zone.addRoom(home.rooms.first { $0.uniqueIdentifier == id }!) }
+            for member in zone.rooms where !desired.contains(member.uniqueIdentifier) { try await zone.removeRoom(member) }
+            let requestedName = try r.name.map { _ in try newName(r) }
+            if let requestedName, zone.name != requestedName { try await zone.updateName(requestedName) }
+            guard Set(zone.rooms.map(\.uniqueIdentifier)) == desired, requestedName == nil || zone.name == requestedName else { throw failure("Zone membership/name read-back failed") }
+            return "Zone verified: \(zone.uniqueIdentifier)"
+        case "patch_scene":
+            let target = try scene(r.objectID, in: home)
+            let original = target.actions
+            let removed = Set(r.removeActionIDs ?? [])
+            // Add counterparts first; never remove an unsupported action.
+            for spec in r.actions ?? [] {
+                let c = try characteristic(spec.characteristicID, in: home)
+                if !target.actions.contains(where: { ($0 as? HMCharacteristicWriteAction<NSCopying>)?.characteristic.uniqueIdentifier == c.uniqueIdentifier }) {
+                    try await target.addAction(HMCharacteristicWriteAction<NSCopying>(characteristic: c, targetValue: AgentScalar.normalized(spec.value, format: c.metadata?.format).value))
+                }
+            }
+            for update in r.actionUpdates ?? [] {
+                let action = try scalarAction(update.actionID, scene: target)
+                try await action.updateTargetValue(AgentScalar.normalized(update.value, format: action.characteristic.metadata?.format).value)
+            }
+            for id in removed { try await target.removeAction(scalarAction(id, scene: target)) }
+            for action in original where !removed.contains(action.uniqueIdentifier) {
+                guard target.actions.contains(where: { $0.uniqueIdentifier == action.uniqueIdentifier }) else { throw failure("Untouched action disappeared") }
+            }
+            for id in removed { guard !target.actions.contains(where: { $0.uniqueIdentifier == id }) else { throw failure("Action removal read-back failed") } }
+            for update in r.actionUpdates ?? [] {
+                let action = try scalarAction(update.actionID, scene: target)
+                guard scalarEqual(action.targetValue, AgentScalar.normalized(update.value, format: action.characteristic.metadata?.format).value) else { throw failure("Action update read-back failed") }
+            }
+            for spec in r.actions ?? [] {
+                let matches = target.actions.compactMap { $0 as? HMCharacteristicWriteAction<NSCopying> }.filter { $0.characteristic.uniqueIdentifier == spec.characteristicID }
+                guard matches.count == 1, scalarEqual(matches[0].targetValue, AgentScalar.normalized(spec.value, format: matches[0].characteristic.metadata?.format).value) else { throw failure("Action addition read-back failed") }
+            }
+            return "Scene patch verified: \(target.uniqueIdentifier); untouched actions preserved"
+        case "remap_automation_references":
+            let target = try trigger(r.objectID, in: home) as! HMEventTrigger
+            let map = try nativeMap(r, home: home)
+            let start = try NativeReferenceRemap.events(target.events, mapping: map)
+            let end = try NativeReferenceRemap.events(target.endEvents, mapping: map)
+            let condition = try target.predicate.map { try NativeReferenceRemap.predicate($0, mapping: map) }
+            let before = target.isEnabled
+            guard start.changed || end.changed || condition?.changed == true else { return "No mapped native references; configuration unchanged" }
+            if before { try await target.enable(false) }
+            if start.changed { try await target.updateEvents(start.events) }
+            if end.changed { try await target.updateEndEvents(end.events) }
+            if let condition, condition.changed { try await target.updatePredicate(condition.predicate) }
+            guard !(try NativeReferenceRemap.events(target.events, mapping: map)).changed,
+                  !(try NativeReferenceRemap.events(target.endEvents, mapping: map)).changed,
+                  !(try target.predicate.map { try NativeReferenceRemap.predicate($0, mapping: map).changed } ?? false) else { throw failure("Reference remap read-back failed; automation remains disabled") }
+            if before { try await target.enable(true) }
+            guard target.isEnabled == before else { throw failure("Enabled state read-back failed") }
+            return "Native automation references verified; unrelated clauses retained"
+        default: throw failure("Unsupported operation")
+        }
+        return "Placement verified"
+    }
+
     private func publish(_ store: HomeStore) throws {
         let homes: [[String: Any]] = store.homes.map { home in
             let bridges = Dictionary(uniqueKeysWithValues: home.accessories.flatMap { bridge in
@@ -673,7 +919,9 @@ final class AgentBridge {
                         ["id": c.uniqueIdentifier.uuidString, "name": c.localizedDescription,
                          "type": c.characteristicType, "properties": c.properties,
                          "cachedValue": jsonValue(c.value), "metadataReadStatus": metadataReadStatus[c.uniqueIdentifier.uuidString] ?? "not_requested", "format": c.metadata?.format ?? "",
-                         "min": jsonValue(c.metadata?.minimumValue), "max": jsonValue(c.metadata?.maximumValue)]
+                         "min": jsonValue(c.metadata?.minimumValue), "max": jsonValue(c.metadata?.maximumValue),
+                         "step": jsonValue(c.metadata?.stepValue), "validValues": c.metadata?.validValues ?? [],
+                         "unit": c.metadata?.units ?? ""]
                     }
                     return ["id": service.uniqueIdentifier.uuidString, "name": service.name, "type": service.serviceType, "characteristics": characteristics]
                 }
@@ -703,7 +951,9 @@ final class AgentBridge {
                     "zones": zones, "accessories": accessories, "scenes": scenes, "automations": automations]
         }
         try write(["version": 2, "active": true, "writesAllowed": writesAllowed, "capturedAt": isoNow(), "sessionID": sessionID.uuidString,
-                   "liveReadsSupported": true,
+                   "liveReadsSupported": true, "membershipWritesVersion": 1, "incrementalSceneWritesVersion": 1,
+                   "nativeReferenceWritesVersion": 1, "booleanNormalizationVersion": 1, "migrationPlanVersion": 1,
+                   "backupConfigurationVersion": 2,
                    "automationRulesVersion": 1, "automationWritesVersion": 1, "deletionWritesVersion": 1, "conditionCompositionVersion": 1, "automationRulesSource": "HomeKit public API",
                    "valuesAreCached": true, "homes": homes], to: "inventory.json")
     }

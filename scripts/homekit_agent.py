@@ -21,10 +21,11 @@ import uuid
 # Also support importing this client by file path in tests and host launchers.
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from homekit_backup import BackupStore, plan as recovery_plan, restore as recovery_restore, recovery_scope
+from homekit_migration import migration_plan, characteristics, normalize
 
 BUNDLE = "abie.ios.homekitten"
 OPERATIONS = ["rename_accessory", "set_characteristic", "create_scene", "update_scene",
-              "rename_scene", "run_scene", "delete_scene", "delete_automation", "create_timer", "create_event_automation", "update_automation", "create_room", "assign_accessory"]
+              "rename_scene", "run_scene", "delete_scene", "delete_automation", "create_timer", "create_event_automation", "update_automation", "create_room", "assign_accessory", "create_group", "update_group", "create_zone", "update_zone", "rename_room", "patch_scene", "remap_automation_references"]
 
 
 RULE_FIELDS = {"events", "endEvents", "conditions", "additionalConditions", "clearConditions", "recurrenceWeekdays", "executeOnce"}
@@ -107,6 +108,80 @@ def validate_automation_rules(request):
             condition(request[field])
 
 
+EXTENSION_CAPABILITIES = {**{op: "membershipWritesVersion" for op in ("create_group", "update_group", "create_zone", "update_zone", "rename_room")},
+                          "patch_scene": "incrementalSceneWritesVersion", "remap_automation_references": "nativeReferenceWritesVersion"}
+
+
+def validate_extension(request):
+    operation = request["operation"]
+    if operation not in EXTENSION_CAPABILITIES:
+        return
+    allowed = {"operation", "homeID"}
+    allowed |= {
+        "create_group": {"name", "serviceIDs"}, "update_group": {"objectID", "name", "serviceIDs", "addServiceIDs", "removeServiceIDs"},
+        "create_zone": {"name", "roomIDs"}, "update_zone": {"objectID", "name", "roomIDs", "addRoomIDs", "removeRoomIDs"},
+        "rename_room": {"objectID", "name"}, "patch_scene": {"objectID", "actions", "removeActionIDs", "actionUpdates"},
+        "remap_automation_references": {"objectID", "referenceMappings"}}[operation]
+    if set(request) - allowed: raise ValueError("Unrelated fields rejected for " + operation)
+    if operation.startswith("create_") or operation == "rename_room":
+        if not isinstance(request.get("name"), str) or not request["name"].strip() or len(request["name"].strip()) > 128: raise ValueError("Name must contain 1–128 characters")
+    if not operation.startswith("create_") and not request.get("objectID"): raise ValueError("Exact target objectID required")
+    for field in ("serviceIDs", "addServiceIDs", "removeServiceIDs", "roomIDs", "addRoomIDs", "removeRoomIDs", "removeActionIDs"):
+        if field in request:
+            values = request[field]
+            if not isinstance(values, list) or len(values) > 512: raise ValueError("Membership/action list must contain at most 512 UUIDs")
+            request[field] = [str(uuid.UUID(v)).upper() for v in values]
+            if len(set(request[field])) != len(values): raise ValueError("Duplicate membership/action UUID")
+    for replacement, add, remove in (("serviceIDs", "addServiceIDs", "removeServiceIDs"), ("roomIDs", "addRoomIDs", "removeRoomIDs")):
+        if replacement in request and (add in request or remove in request): raise ValueError("Replacement and incremental membership are mutually exclusive")
+        if set(request.get(add, [])) & set(request.get(remove, [])): raise ValueError("Membership additions and removals overlap")
+    for field, key in (("actions", "characteristicID"), ("actionUpdates", "actionID")):
+        if field in request:
+            items = request[field]
+            if not isinstance(items, list) or len(items) > 512: raise ValueError("Action patch too large")
+            for item in items:
+                if not isinstance(item, dict) or set(item) != {key, "value"} or type(item.get("value")) not in (bool, int, float, str): raise ValueError("Scalar action fields required")
+                item[key] = str(uuid.UUID(item[key])).upper()
+            if len({item[key] for item in items}) != len(items): raise ValueError("Duplicate patch action target")
+    if set(request.get("removeActionIDs", [])) & {i["actionID"] for i in request.get("actionUpdates", [])}: raise ValueError("Action updates and removals overlap")
+    if operation == "patch_scene" and not any(request.get(k) for k in ("actions", "actionUpdates", "removeActionIDs")): raise ValueError("Action changes required")
+    if operation in ("update_group", "update_zone") and len(request) <= 3: raise ValueError("Membership or name change required")
+    if operation == "remap_automation_references":
+        pairs = request.get("referenceMappings")
+        if not isinstance(pairs, list) or not 1 <= len(pairs) <= 64: raise ValueError("Provide 1–64 reference pairs")
+        for pair in pairs:
+            if set(pair) != {"sourceID", "targetID"}: raise ValueError("Exact reference mapping fields required")
+            for key in pair: pair[key] = str(uuid.UUID(pair[key])).upper()
+        source = {p["sourceID"] for p in pairs}; target = {p["targetID"] for p in pairs}
+        if len(source) != len(pairs) or len(target) != len(pairs) or source & target: raise ValueError("Duplicate/overlapping/chained reference mapping")
+
+
+def normalize_request(request, inventory):
+    homes = [h for h in inventory.get("homes", []) if h["id"].upper() == request["homeID"]]
+    if not homes: return  # Older unit fixtures; the app always resolves the exact Home UUID.
+    home = homes[0]; chars = characteristics(home)
+    def value(identifier, scalar):
+        if identifier not in chars: raise ValueError("Characteristic UUID not found in current Home")
+        return normalize(scalar, chars[identifier])
+    if request["operation"] == "set_characteristic": request["value"] = value(request["objectID"], request["value"])
+    for item in request.get("actions", []): item["value"] = value(item["characteristicID"], item["value"])
+    if request.get("actionUpdates"):
+        scene = next((s for s in home["scenes"] if s["id"] == request["objectID"]), None)
+        if not scene: raise ValueError("Scene UUID not found")
+        for item in request["actionUpdates"]:
+            action = next((a for a in scene["actions"] if a.get("id") == item["actionID"]), None)
+            if not action or action.get("kind") != "characteristicWrite": raise ValueError("Supported action UUID not found")
+            item["value"] = value(action["characteristicID"], item["value"])
+    for field in ("events", "endEvents"):
+        for item in request.get(field, []):
+            if item["kind"] == "characteristic": item["value"] = value(item["characteristicID"], item["value"])
+    def condition(node):
+        if node.get("kind") == "characteristic": node["value"] = value(node["characteristicID"], node["value"])
+        for child in node.get("children", []): condition(child)
+    for field in ("conditions", "additionalConditions"):
+        if field in request: condition(request[field])
+
+
 class Client:
     def __init__(self, device):
         self.device = device
@@ -149,7 +224,12 @@ class Client:
                 raise ValueError("Deletion requires objectID")
             if set(request) - {"operation", "homeID", "objectID"}:
                 raise ValueError("Deletion accepts only operation, homeID, and objectID")
+        for item in request.get("actions", []):
+            item["characteristicID"] = str(uuid.UUID(item["characteristicID"])).upper()
+        if "sceneIDs" in request:
+            request["sceneIDs"] = [str(uuid.UUID(value)).upper() for value in request["sceneIDs"]]
         validate_automation_rules(request)
+        validate_extension(request)
         request["id"] = str(uuid.uuid4()).upper()
         inventory = self.inventory()
         if not inventory.get("writesAllowed"):
@@ -162,6 +242,10 @@ class Client:
             return isinstance(node, dict) and (node.get("kind") == "presence" or any(needs_composition(child) for child in node.get("children", [])))
         if ("additionalConditions" in request or needs_composition(request.get("conditions"))) and inventory.get("conditionCompositionVersion", 0) < 1:
             raise RuntimeError("This app build does not support condition composition; install the updated HomeKitten app.")
+        capability = EXTENSION_CAPABILITIES.get(request["operation"])
+        if capability and inventory.get(capability, 0) < 1:
+            raise RuntimeError("Install the signed HomeKitten app with " + capability)
+        normalize_request(request, inventory)
         request["sessionID"] = inventory["sessionID"]
         encoded = json.dumps(request, allow_nan=False).encode()
         if len(encoded) > 65536:
@@ -173,7 +257,7 @@ class Client:
             # Cached state is not a reliable rollback value for a physical write.
             read = self.live_read({"homeID": request["homeID"], "characteristicIDs": [request["objectID"]]})
             record["beforeRead"] = read
-        recovery = recovery_scope(request, backup["id"])
+        recovery = recovery_scope(request, backup["id"], inventory)
         record["recoveryScope"] = recovery
         store.write(record)
         if "kind" in recovery:
@@ -320,6 +404,9 @@ def tool_definitions():
                                  "characteristicID": {"type": "string", "format": "uuid"},
                                  "value": {"type": ["boolean", "number", "string"]}}}},
                              "sceneIDs": {"type": "array", "items": {"type": "string", "format": "uuid"}},
+                             **{field: {"type": "array", "maxItems": 512, "uniqueItems": True, "items": {"type": "string", "format": "uuid"}} for field in ("serviceIDs", "addServiceIDs", "removeServiceIDs", "roomIDs", "addRoomIDs", "removeRoomIDs", "removeActionIDs")},
+                             "actionUpdates": {"type": "array", "maxItems": 512, "items": {"type": "object", "additionalProperties": False, "required": ["actionID", "value"], "properties": {"actionID": {"type": "string", "format": "uuid"}, "value": scalar}}},
+                             "referenceMappings": {"type": "array", "minItems": 1, "maxItems": 64, "items": {"type": "object", "additionalProperties": False, "required": ["sourceID", "targetID"], "properties": {"sourceID": {"type": "string", "format": "uuid"}, "targetID": {"type": "string", "format": "uuid"}}}},
                              "fireDate": {"type": "string", "description": "Future ISO 8601 UTC date, e.g. 2026-10-07T12:00:00Z"},
                              "recurrenceMinutes": {"type": "integer", "minimum": 1, "maximum": 525600},
                              "enabled": {"type": "boolean"},
@@ -345,11 +432,12 @@ def tool_definitions():
     ]
     recovery_properties = {"identifier": {"type": "string", "format": "uuid"},
                            "home_id": {"type": "string", "format": "uuid"},
-                           "kind": {"enum": ["accessory", "scene", "automation", "characteristic"]},
+                           "kind": {"enum": ["accessory", "scene", "automation", "characteristic", "group", "zone", "room", "scene_patch"]},
                            "object_id": {"type": "string", "format": "uuid"},
+                           "characteristic_ids": {"type": "array", "minItems": 1, "uniqueItems": True, "items": {"type": "string", "format": "uuid"}},
                            "fields": {"type": "array", "minItems": 1, "uniqueItems": True, "items": {"enum": [
                                "name", "roomID", "actions", "value", "enabled", "sceneIDs", "events", "endEvents", "conditions",
-                               "additionalConditions", "clearConditions", "recurrenceWeekdays", "executeOnce"]}}}
+                               "additionalConditions", "clearConditions", "recurrenceWeekdays", "executeOnce", "serviceIDs", "roomIDs"]}}}
     for name, description, properties, required, readonly in [
         ("home_backup_create", "Save and checksum-verify a durable private inventory backup. Values are cached; public API limitations are recorded.", {"label": {"type": "string"}}, [], True),
         ("home_backup_list", "List private agent backups and integrity status without dumping Home metadata.", {}, [], True),
@@ -358,13 +446,16 @@ def tool_definitions():
     ]:
         definitions.append({"name": name, "description": description, "annotations": {"readOnlyHint": readonly},
                             "inputSchema": {"type": "object", "additionalProperties": False, "properties": properties, "required": required}})
+    definitions.append({"name": "home_migration_plan", "description": "Read-only hardware-identity and service/characteristic compatibility audit with add-first requests for rooms, groups and scalar scene patches. Audits native rule and hidden references; never authorizes retirement or physical parity.", "annotations": {"readOnlyHint": True},
+                        "inputSchema": {"type": "object", "additionalProperties": False, "required": ["homeID", "pairs"], "properties": {"homeID": {"type": "string", "format": "uuid"},
+                            "pairs": {"type": "array", "minItems": 1, "maxItems": 128, "items": {"type": "object", "additionalProperties": False, "required": ["sourceID", "targetID"], "properties": {"sourceID": {"type": "string", "format": "uuid"}, "targetID": {"type": "string", "format": "uuid"}}}}}}})
     return definitions
 
 
 def dispatch(client, method, params):
     if method == "initialize":
         return {"protocolVersion": params.get("protocolVersion", "2024-11-05"),
-                "capabilities": {"tools": {}}, "serverInfo": {"name": "homekitten-usb", "version": "1.4.0"}}
+                "capabilities": {"tools": {}}, "serverInfo": {"name": "homekitten-usb", "version": "1.5.0"}}
     if method == "ping":
         return {}
     if method == "tools/list":
@@ -391,6 +482,8 @@ def dispatch(client, method, params):
                 result = recovery_plan(BackupStore(), client, **args)
             elif name == "home_restore_apply":
                 result = recovery_restore(BackupStore(), client, args)
+            elif name == "home_migration_plan":
+                result = migration_plan(client.inventory(), **args)
             else:
                 raise ValueError("Unknown tool")
             return {"content": [{"type": "text", "text": json.dumps(result)}]}
@@ -428,6 +521,7 @@ def main():
         commands.add_parser(command).add_argument("request", type=pathlib.Path)
     commands.add_parser("submit").add_argument("request", type=pathlib.Path)
     commands.add_parser("result").add_argument("id")
+    commands.add_parser("migration-plan").add_argument("request", type=pathlib.Path)
     commands.add_parser("read").add_argument("request", type=pathlib.Path)
     commands.add_parser("read-result").add_argument("id")
     args = parser.parse_args()
@@ -448,6 +542,8 @@ def main():
             result = recovery_restore(BackupStore(), client, json.loads(args.request.read_text()))
         elif args.command == "submit":
             result = client.submit(json.loads(args.request.read_text()))
+        elif args.command == "migration-plan":
+            result = migration_plan(client.inventory(), **json.loads(args.request.read_text()))
         elif args.command == "read":
             result = client.live_read(json.loads(args.request.read_text()))
         elif args.command == "read-result":

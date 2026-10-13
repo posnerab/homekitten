@@ -131,5 +131,14 @@ previewed and restored by UUID, with backups before recovery writes and independ
 configuration verification afterward. Abie-mini also keeps verified copies on
 Mac-Extend. See [backup and recovery](docs/BACKUP_RECOVERY.md) for CLI/MCP tools,
 storage, uncertain-result handling, and the limits of Apple Home rule recovery.
-Refresh existing MCP connections to discover the new tools; this Python-only
-release uses the existing signed app without an app reinstall.
+Refresh existing MCP connections to discover the new tools; the original backup client release used the existing signed app without an app
+reinstall. The migration extensions below require the updated signed app.
+
+## Staged migrations and incremental writes
+
+The signed app and MCP client now support exact-UUID service-group and zone
+membership, room rename, scalar patches to built-in/owned scenes, native automation
+reference mapping that retains unrelated clauses, and a read-only hardware-matched
+migration planner. Membership and scalar patches have scoped backup recovery.
+See [staged migration](docs/STAGED_MIGRATION.md) for operation fields, version
+flags, read-back, safety gates and hidden-data/physical-parity limits.

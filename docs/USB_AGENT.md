@@ -332,3 +332,14 @@ recovery through MCP; the CLI exposes `backup`, `backups`, `restore-preview` and
 public API limits. `home_change_execute` returns its backup ID and recovery
 assessment. Refresh existing MCP clients for the new schema. Client-only releases
 do not need the signed app reinstalled.
+
+## Migration extensions (client 1.5.0 / signed app build 7)
+
+Read [STAGED_MIGRATION.md](STAGED_MIGRATION.md) for the precise fields and gates.
+New operations: `create_group`, `update_group`, `create_zone`, `update_zone`,
+`rename_room`, `patch_scene`, `remap_automation_references`. New read-only tool:
+`home_migration_plan`. Inventory advertises membership/incremental/native-reference
+write versions and exports exact action IDs plus characteristic step/choice/unit
+metadata. Bool targets accept numeric 0/1 only on bool formats. Every write retains
+mirrored backups, write-ahead receipts, app/session validation and no-replay rules.
+Migration planning/staging is not bridge retirement or physical command proof.

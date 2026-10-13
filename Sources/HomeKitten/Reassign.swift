@@ -203,3 +203,41 @@ private struct ServiceMapper {
         return matches.indices.contains(ordinal) ? matches[ordinal] : matches.first
     }
 }
+
+// Native reference surgery: reuse every unrelated event/expression/predicate.
+// No serialization round trip, predicate parsing, evaluation or clause dropping.
+@MainActor
+enum NativeReferenceRemap {
+    struct EventResult { let events: [HMEvent]; let changed: Bool }
+    struct PredicateResult { let predicate: NSPredicate; let changed: Bool }
+    static func events(_ values: [HMEvent], mapping: [UUID: HMCharacteristic]) throws -> EventResult {
+        var changed = false
+        let result = try values.map { value -> HMEvent in
+            if let event = value as? HMCharacteristicEvent<NSCopying>, let replacement = mapping[event.characteristic.uniqueIdentifier] {
+                changed = true
+                return HMCharacteristicEvent<NSCopying>(characteristic: replacement, triggerValue: event.triggerValue)
+            }
+            if let event = value as? HMCharacteristicThresholdRangeEvent, let replacement = mapping[event.characteristic.uniqueIdentifier] {
+                changed = true
+                return HMCharacteristicThresholdRangeEvent(characteristic: replacement, thresholdRange: event.thresholdRange)
+            }
+            // Unrelated calendar, duration, solar, location and custom-user events stay native.
+            if !["HMCharacteristicEvent", "HMCharacteristicThresholdRangeEvent", "HMCalendarEvent", "HMSignificantTimeEvent", "HMDurationEvent", "HMPresenceEvent", "HMLocationEvent"].contains(String(describing: type(of: value))) {
+                throw failure("Unknown native event: reference coverage cannot be verified")
+            }
+            return value
+        }
+        return EventResult(events: result, changed: changed)
+    }
+    static func predicate(_ value: NSPredicate, mapping: [UUID: HMCharacteristic]) throws -> PredicateResult {
+        let result = try NativePredicateReference.rewrite(value, sourceIDs: Set(mapping.keys)) { object in
+            guard let characteristic = object as? HMCharacteristic else { return nil }
+            return mapping[characteristic.uniqueIdentifier]
+        }
+        return PredicateResult(predicate: result.predicate, changed: result.changed)
+    }
+
+    private static func failure(_ message: String) -> NSError {
+        NSError(domain: "HomeKitten.NativeReferenceRemap", code: 1, userInfo: [NSLocalizedDescriptionKey: message])
+    }
+}

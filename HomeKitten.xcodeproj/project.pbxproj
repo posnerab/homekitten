@@ -18,6 +18,9 @@
 		A00000000000000000000018 /* AgentBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000009 /* AgentBridge.swift */; };
 		B0000000000000000000001A /* AutomationRules.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0000000000000000000000A /* AutomationRules.swift */; };
 		B0000000000000000000001B /* AutomationInventory.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0000000000000000000000B /* AutomationInventory.swift */; };
+		C00000000000000000000011 /* AgentScalar.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000001 /* AgentScalar.swift */; };
+		C00000000000000000000012 /* AgentMembership.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000002 /* AgentMembership.swift */; };
+		C00000000000000000000013 /* NativePredicateReference.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000003 /* NativePredicateReference.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -33,6 +36,9 @@
 		A00000000000000000000009 /* AgentBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentBridge.swift; sourceTree = "<group>"; };
 		B0000000000000000000000A /* AutomationRules.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutomationRules.swift; sourceTree = "<group>"; };
 		B0000000000000000000000B /* AutomationInventory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutomationInventory.swift; sourceTree = "<group>"; };
+		C00000000000000000000001 /* AgentScalar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentScalar.swift; sourceTree = "<group>"; };
+		C00000000000000000000002 /* AgentMembership.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentMembership.swift; sourceTree = "<group>"; };
+		C00000000000000000000003 /* NativePredicateReference.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativePredicateReference.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -66,6 +72,9 @@
 				A00000000000000000000007 /* Reassign.swift */,
 				A00000000000000000000008 /* ShortcutsView.swift */,
 				A00000000000000000000009 /* AgentBridge.swift */,
+				C00000000000000000000001 /* AgentScalar.swift */,
+				C00000000000000000000003 /* NativePredicateReference.swift */,
+				C00000000000000000000002 /* AgentMembership.swift */,
 				B0000000000000000000000B /* AutomationInventory.swift */,
 				B0000000000000000000000A /* AutomationRules.swift */,
 			);
@@ -165,6 +174,9 @@
 				A00000000000000000000016 /* Reassign.swift in Sources */,
 				A00000000000000000000017 /* ShortcutsView.swift in Sources */,
 				A00000000000000000000018 /* AgentBridge.swift in Sources */,
+				C00000000000000000000011 /* AgentScalar.swift in Sources */,
+				C00000000000000000000013 /* NativePredicateReference.swift in Sources */,
+				C00000000000000000000012 /* AgentMembership.swift in Sources */,
 				B0000000000000000000001B /* AutomationInventory.swift in Sources */,
 				B0000000000000000000001A /* AutomationRules.swift in Sources */,
 			);
@@ -264,7 +276,7 @@
 				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = Resources/HomeKitten.mac.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CODE_SIGN_IDENTITY = "Apple Development";
-				CURRENT_PROJECT_VERSION = 5;
+				CURRENT_PROJECT_VERSION = 7;
 				DERIVE_MACCATALYST_PRODUCT_BUNDLE_IDENTIFIER = NO;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Resources/Info.plist;
@@ -291,7 +303,7 @@
 				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = Resources/HomeKitten.mac.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CODE_SIGN_IDENTITY = "Apple Development";
-				CURRENT_PROJECT_VERSION = 5;
+				CURRENT_PROJECT_VERSION = 7;
 				DERIVE_MACCATALYST_PRODUCT_BUNDLE_IDENTIFIER = NO;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Resources/Info.plist;
