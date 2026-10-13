@@ -2,6 +2,19 @@ import Foundation
 
 // Inspect references without evaluating predicates or changing native clauses.
 enum BridgeRemovalAudit {
+    @MainActor
+    static func waitForAbsence<Snapshot>(_ ids: Set<UUID>, attempts: Int = 300,
+                                        snapshot: () throws -> Snapshot,
+                                        identifiers: (Snapshot) -> Set<UUID>,
+                                        pause: () async throws -> Void = { try await Task.sleep(nanoseconds: 100_000_000) }) async throws -> Snapshot {
+        for _ in 0..<attempts {
+            let current = try snapshot()
+            if ids.isDisjoint(with: identifiers(current)) { return current }
+            try await pause()
+        }
+        throw failure("Bridge deletion has not settled; inspect Home before retrying")
+    }
+
     static func validateIDs(_ supplied: [UUID], actual: Set<UUID>, nonempty: Bool, label: String) throws {
         guard supplied.count <= 512, Set(supplied).count == supplied.count,
               !nonempty || !supplied.isEmpty, Set(supplied) == actual else {

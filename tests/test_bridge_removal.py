@@ -102,6 +102,17 @@ for supplied in [[], [unrelated.id], [source.id, source.id]] {
 }
 try BridgeRemovalAudit.validateIDs([], actual: [], nonempty: false, label: "opaque")
 print("Bridge removal audit passed")
+var polls = 0
+let gone: Set<UUID> = []
+let settled = try await BridgeRemovalAudit.waitForAbsence(ids, attempts: 6, snapshot: {
+    polls += 1; return polls <= 4 ? ids : gone
+}, identifiers: { $0 }, pause: {})
+assert(settled.isEmpty && polls == 5)
+do {
+    _ = try await BridgeRemovalAudit.waitForAbsence(ids, attempts: 3, snapshot: { ids }, identifiers: { $0 }, pause: {})
+    assertionFailure("Unsettled removal must fail; never replay the write")
+} catch {}
+print("Delayed bridge removal confirmation passed")
 '''
         source = pathlib.Path(__file__).parents[1] / 'Sources/HomeKitten/BridgeRemovalAudit.swift'
         with tempfile.TemporaryDirectory() as directory:

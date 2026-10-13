@@ -603,7 +603,9 @@ final class AgentBridge {
         }
         switch r.operation {
         case "remove_bridge":
-            return try await HomeBridgeRemoval.remove(r, home: home)
+            return try await HomeBridgeRemoval.remove(r, home: home, currentHome: { [weak self] in
+                self?.store?.homes.first { $0.uniqueIdentifier == r.homeID }
+            })
         case "delete_scene":
             let target = try scene(r.objectID, in: home)
             try await HomeDeletion.deleteScene(target, in: home)

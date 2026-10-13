@@ -55,7 +55,7 @@ enum HomeBridgeRemoval {
         return bridge
     }
 
-    static func remove(_ request: AgentRequest, home: HMHome) async throws -> String {
+    static func remove(_ request: AgentRequest, home: HMHome, currentHome: () -> HMHome?) async throws -> String {
         let bridge = try validate(request, home: home)
         try HomeBackupService.saveDeletionBackup(home: home)
         _ = try validate(request, home: home)
@@ -70,17 +70,16 @@ enum HomeBridgeRemoval {
                 else { continuation.resume() }
             }
         }
-        for _ in 0..<50 {
-            if removing.isDisjoint(with: Set(home.accessories.map(\.uniqueIdentifier))) { break }
-            try await Task.sleep(nanoseconds: 100_000_000)
-        }
-        guard removing.isDisjoint(with: Set(home.accessories.map(\.uniqueIdentifier))),
-              keepAccessories.isSubset(of: Set(home.accessories.map(\.uniqueIdentifier))),
-              keepTriggers.isSubset(of: Set(home.triggers.map(\.uniqueIdentifier))) else {
+        let freshHome = try await BridgeRemovalAudit.waitForAbsence(removing, snapshot: {
+            guard let current = currentHome() else { throw failure("Home unavailable after removal; inspect before retrying") }
+            return current
+        }, identifiers: { Set($0.accessories.map(\.uniqueIdentifier)) })
+        guard keepAccessories.isSubset(of: Set(freshHome.accessories.map(\.uniqueIdentifier))),
+              keepTriggers.isSubset(of: Set(freshHome.triggers.map(\.uniqueIdentifier))) else {
             throw failure("Bridge deletion absence/preservation check failed; inspect Home before retrying")
         }
-        let afterScenes = Dictionary(uniqueKeysWithValues: scenes(in: home).map { ($0.uniqueIdentifier, Set($0.actions.map(\.uniqueIdentifier))) })
-        let afterGroups = Dictionary(uniqueKeysWithValues: home.serviceGroups.map { ($0.uniqueIdentifier, Set($0.services.map(\.uniqueIdentifier))) })
+        let afterScenes = Dictionary(uniqueKeysWithValues: scenes(in: freshHome).map { ($0.uniqueIdentifier, Set($0.actions.map(\.uniqueIdentifier))) })
+        let afterGroups = Dictionary(uniqueKeysWithValues: freshHome.serviceGroups.map { ($0.uniqueIdentifier, Set($0.services.map(\.uniqueIdentifier))) })
         guard keepScenes.allSatisfy({ afterScenes[$0.key] == $0.value }),
               keepGroups.allSatisfy({ afterGroups[$0.key] == $0.value }) else {
             throw failure("Unrelated scene/group changed during bridge deletion; inspect Home before retrying")
