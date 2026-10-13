@@ -131,7 +131,7 @@ these gates cannot be certified by a configuration-only tool.
 
 ## Bridge retirement through MCP
 
-Build 8 advertises `bridgeRemovalVersion: 1`. MCP `home_change_execute` supports
+Build 9 advertises `bridgeRemovalVersion: 1`. MCP `home_change_execute` supports
 `remove_bridge` with exact `homeID`, bridge `objectID`, the complete current
 `bridgedAccessoryIDs`, and `auditedOpaqueSceneIDs`. No other change fields are
 accepted. Refresh a cached MCP connection, or initialize a fresh stdio session
@@ -147,7 +147,8 @@ Predicate inspection follows native function operands and collections without
 evaluating or rewriting them; unknown expressions/events fail closed.
 
 Removal saves a fresh Home/rule backup and repeats preflight, calls the public
-HomeKit bridge-removal API, then checks absence of the bridge/children and
+HomeKit bridge-removal API, waits up to thirty seconds for refreshed Home state,
+then checks absence of the bridge/children and
 preservation of unrelated accessory, scene/action, group/member and automation
 UUIDs. Independently read Home configuration and service health afterward.
 Pairing removal has no automatic inverse: configuration snapshots do not

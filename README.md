@@ -125,7 +125,7 @@ rule. See [operation safeguards](docs/USB_AGENT.md).
 
 ## Populated bridge retirement through MCP
 
-Signed build 8 and client 1.6.0 add `remove_bridge` to `home_change_execute`.
+Signed build 9 and client 1.6.0 add `remove_bridge` to `home_change_execute`.
 It requires the exact bridge, complete child UUID list, and preceding opaque-scene
 audit, and refuses remaining scene/group/native-rule references. After removal it
 verifies child absence and preservation of unrelated objects. Pairing deletion
