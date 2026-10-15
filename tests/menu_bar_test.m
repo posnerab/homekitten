@@ -22,6 +22,7 @@ int main(void) {
             @"busy": @(busy), @"status": @"Connected"}; }
             action:^BOOL(NSString *action) { actions++; return !busy; }];
         [menu runtimeState];
+        NSCAssert(menu.item.button.window.isVisible, @"Startup hide must leave the status icon visible");
         NSCAssert(window.delegate != original, @"Window close must be intercepted");
         NSSize size = [window.delegate windowWillResize:window toSize:NSMakeSize(1, 1)];
         NSCAssert(size.width == 600, @"Unrelated delegate methods must be forwarded");
@@ -30,6 +31,7 @@ int main(void) {
         NSCAssert(window.isVisible && !menu.hidden, @"Open must restore the retained window");
         [window performClose:nil];
         NSCAssert(!window.isVisible && menu.hidden, @"Close must hide, preserving the window");
+        NSCAssert(menu.item.button.window.isVisible, @"Closing the app window must leave the status icon visible");
         [menu selected:open];
         NSCAssert(window.isVisible, @"Reopen after close must work");
         busy = YES;

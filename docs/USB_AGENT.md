@@ -354,7 +354,7 @@ Migration planning/staging is not bridge retirement or physical command proof.
 The signed Catalyst app embeds a small native AppKit bundle for its status item
 and window controls. The HomeKit manager and bridge remain in the signed host,
 with the same bundle ID, entitlement, files, authorization and transaction rules.
-Closing the manager hides it; use the house menu icon to reopen it, disconnect
+Closing the manager hides it; use the HomeKitten menu icon to reopen it, disconnect
 Agent Access, or quit. Existing connections resume on launch even without an
 active scene. No new connection or write authorization is granted automatically.
 The app must remain running and the Mac awake. iPhone/iPad background limits
@@ -362,7 +362,7 @@ are unchanged. Build the app normally; its Mac-only build phase compiles and
 signs the embedded bundle using the host's selected identity.
 
 For local lifecycle diagnostics, `AgentBridge/mac-runtime.json` reports the
-menu bar, visible-window count, Dock policy, bridge state and timestamp without
+menu bar creation and actual visibility, visible-window count, Dock policy, bridge state and timestamp without
 Home data. The file is local runtime state, not a connection authorization.
 
 Validate the native window/menu behavior on Mac alongside the Python tests:

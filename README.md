@@ -88,7 +88,7 @@ python3 scripts/homekit_agent.py --local-bridge ~/Documents/AgentBridge inventor
 python3 scripts/homekit_agent.py --local-bridge ~/Documents/AgentBridge mcp
 ```
 
-The Mac app has a HomeKitten house icon in the menu bar. Closing the main
+The Mac app shows its colored HomeKitten app icon in the menu bar. Closing the main
 window or choosing **Hide HomeKitten** removes its windows and Dock icon while
 Agent Access continues. **Open HomeKitten** brings the manager back; **Disconnect
 Agent** revokes the remembered connection, and **Quit HomeKitten** stops the app.

@@ -28,7 +28,13 @@
     self.delegates = [NSMapTable weakToStrongObjectsMapTable];
     self.hidden = [state()[@"connected"] boolValue];
     self.item = [NSStatusBar.systemStatusBar statusItemWithLength:NSVariableStatusItemLength];
-    self.item.button.image = [NSImage imageWithSystemSymbolName:@"house.fill" accessibilityDescription:@"HomeKitten"];
+    NSURL *iconURL = [[NSBundle bundleForClass:self.class] URLForResource:@"HomeKittenMenuBar" withExtension:@"png"];
+    NSImage *icon = [[NSImage alloc] initWithContentsOfURL:iconURL];
+    icon.size = NSMakeSize(20, 20);
+    icon.template = NO;
+    self.item.button.image = icon;
+    if (!icon) self.item.button.title = @"HK";
+    self.item.button.accessibilityLabel = @"HomeKitten";
     self.item.button.toolTip = @"HomeKitten Agent Access";
     NSMenu *menu = [[NSMenu alloc] initWithTitle:@"HomeKitten"];
     menu.autoenablesItems = NO;
@@ -69,12 +75,19 @@
     }
     if (self.hidden && NSApp.activationPolicy != NSApplicationActivationPolicyAccessory)
         [NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];
-    return @{@"menuBarInstalled": @(self.item != nil), @"hidden": @(self.hidden),
+    return @{@"menuBarInstalled": @(self.item != nil), @"menuBarVisible": @(self.item.button.window.isVisible), @"hidden": @(self.hidden),
              @"visibleWindows": @(visible), @"dockVisible": @(NSApp.activationPolicy == NSApplicationActivationPolicyRegular)};
 }
 - (void)hideWindows {
     self.hidden = YES;
-    for (NSWindow *window in NSApp.windows) if (![window isKindOfClass:NSPanel.class]) [window orderOut:nil];
+    // NSApp.windows also contains the status item's window. Hiding it removes
+    // the only way back into this accessory app, so hide tracked app windows only.
+    for (NSWindow *window in NSApp.windows) {
+        if ((window.styleMask & NSWindowStyleMaskClosable) && ![window isKindOfClass:NSPanel.class]) {
+            [self trackWindow:window];
+            [window orderOut:nil];
+        }
+    }
     [NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];
 }
 - (void)menuWillOpen:(NSMenu *)menu {
