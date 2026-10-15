@@ -27,10 +27,12 @@
     self.action = action;
     self.delegates = [NSMapTable weakToStrongObjectsMapTable];
     self.hidden = [state()[@"connected"] boolValue];
-    self.item = [NSStatusBar.systemStatusBar statusItemWithLength:NSVariableStatusItemLength];
+    self.item = [NSStatusBar.systemStatusBar statusItemWithLength:28];
+    self.item.autosaveName = @"HomeKitten";
+    self.item.visible = YES;
     NSURL *iconURL = [[NSBundle bundleForClass:self.class] URLForResource:@"HomeKittenMenuBar" withExtension:@"png"];
     NSImage *icon = [[NSImage alloc] initWithContentsOfURL:iconURL];
-    icon.size = NSMakeSize(20, 20);
+    icon.size = NSMakeSize(22, 22);
     icon.template = NO;
     self.item.button.image = icon;
     if (!icon) self.item.button.title = @"HK";
@@ -75,7 +77,12 @@
     }
     if (self.hidden && NSApp.activationPolicy != NSApplicationActivationPolicyAccessory)
         [NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];
-    return @{@"menuBarInstalled": @(self.item != nil), @"menuBarVisible": @(self.item.button.window.isVisible), @"hidden": @(self.hidden),
+    return @{@"menuBarInstalled": @(self.item != nil), @"menuBarVisible": @(self.item.button.window.isVisible),
+             @"statusItemVisible": @(self.item.isVisible),
+             @"statusWindowFrame": NSStringFromRect(self.item.button.window.frame),
+             @"statusButtonFrame": NSStringFromRect(self.item.button.frame),
+             @"statusImageAvailable": @(self.item.button.image != nil),
+             @"statusWindowAlpha": @(self.item.button.window.alphaValue), @"applicationHidden": @(NSApp.hidden), @"hidden": @(self.hidden),
              @"visibleWindows": @(visible), @"dockVisible": @(NSApp.activationPolicy == NSApplicationActivationPolicyRegular)};
 }
 - (void)hideWindows {

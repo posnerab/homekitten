@@ -4,7 +4,7 @@ set -euo pipefail
 [[ "${IS_MACCATALYST:-NO}" == YES ]] || exit 0
 bundle="${TARGET_BUILD_DIR}/${CONTENTS_FOLDER_PATH}/PlugIns/HomeKittenMenuBar.bundle"
 mkdir -p "$bundle/Contents/MacOS" "$bundle/Contents/Resources"
-cp "$SRCROOT/Resources/Assets.xcassets/AppIconV2.appiconset/icon-64.png" "$bundle/Contents/Resources/HomeKittenMenuBar.png"
+sips -z 64 64 "$SRCROOT/Resources/MenuBarMotif.png" --out "$bundle/Contents/Resources/HomeKittenMenuBar.png" >/dev/null
 sdk="$(xcrun --sdk macosx --show-sdk-path)"
 arch_flags=()
 for architecture in $ARCHS; do arch_flags+=(-arch "$architecture"); done

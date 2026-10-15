@@ -173,7 +173,7 @@
             isa = PBXShellScriptBuildPhase;
             buildActionMask = 2147483647;
             files = ();
-            inputPaths = ("$(SRCROOT)/Sources/MacMenuBar/MenuBar.m", "$(SRCROOT)/scripts/build_menu_bar.sh", "$(SRCROOT)/Resources/Assets.xcassets/AppIconV2.appiconset/icon-64.png");
+            inputPaths = ("$(SRCROOT)/Sources/MacMenuBar/MenuBar.m", "$(SRCROOT)/scripts/build_menu_bar.sh", "$(SRCROOT)/Resources/MenuBarMotif.png");
             outputPaths = ("$(TARGET_BUILD_DIR)/$(CONTENTS_FOLDER_PATH)/PlugIns/HomeKittenMenuBar.bundle");
             name = "Build Mac menu bar";
             runOnlyForDeploymentPostprocessing = 0;
@@ -299,7 +299,7 @@
 				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = Resources/HomeKitten.mac.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CODE_SIGN_IDENTITY = "Apple Development";
-				CURRENT_PROJECT_VERSION = 11;
+				CURRENT_PROJECT_VERSION = 12;
 				DERIVE_MACCATALYST_PRODUCT_BUNDLE_IDENTIFIER = NO;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Resources/Info.plist;
@@ -326,7 +326,7 @@
 				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = Resources/HomeKitten.mac.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CODE_SIGN_IDENTITY = "Apple Development";
-				CURRENT_PROJECT_VERSION = 11;
+				CURRENT_PROJECT_VERSION = 12;
 				DERIVE_MACCATALYST_PRODUCT_BUNDLE_IDENTIFIER = NO;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Resources/Info.plist;
