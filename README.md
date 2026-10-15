@@ -88,8 +88,17 @@ python3 scripts/homekit_agent.py --local-bridge ~/Documents/AgentBridge inventor
 python3 scripts/homekit_agent.py --local-bridge ~/Documents/AgentBridge mcp
 ```
 
-The app must remain running and the Mac awake. Minimizing the window keeps
-the bridge available. Quit or sleep prevents access; stale snapshots are
+The Mac app has a HomeKitten house icon in the menu bar. Closing the main
+window or choosing **Hide HomeKitten** removes its windows and Dock icon while
+Agent Access continues. **Open HomeKitten** brings the manager back; **Disconnect
+Agent** revokes the remembered connection, and **Quit HomeKitten** stops the app.
+Disconnect and Quit are disabled while an agent read or write is executing.
+After the initial connection, subsequent launches start in the menu bar and
+resume the remembered access mode without a foreground window. Initial HomeKit
+permission and Agent Access authorization still happen in the main window.
+
+The app must remain running and the Mac awake. The menu bar mode prevents App
+Nap while connected, but does not prevent system sleep or install a login item. Quit or sleep prevents access; stale snapshots are
 rejected. Existing session authorization, backups and transaction safeguards
 apply to both transports. Paid membership does not remove iPadOS background
 suspension. TestFlight/App Store distribution remains a separate release.

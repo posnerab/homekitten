@@ -142,6 +142,7 @@ final class AgentBridge {
     private var metadataReads = Set<UUID>()
     private var metadataReadStatus = [String: String]()
     private var timer: Timer?
+    var hasActiveOperation: Bool { busy || reading }
     private var reading = false
     private var store: HomeStore?
     private var backgroundTask: UIBackgroundTaskIdentifier = .invalid

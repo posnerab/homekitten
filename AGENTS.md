@@ -25,7 +25,9 @@ optional stdio tool server.
 - Connection and write mode are remembered in app settings until **Disconnect**
   is tapped. The bridge is owned by `HomeKittenApp`, not a particular screen.
   Navigating away from Agent Access must not disconnect it.
-- On Mac Catalyst, minimizing keeps an enabled bridge running; sleep or quit stops access.
+- On Mac Catalyst, closing/hiding the window keeps an enabled bridge running in
+  the menu bar. Authorized launches resume without a foreground window; sleep or
+  quit stops access. The app delegate owns readiness and connection lifetime.
 - On iPhone/iPad, foreground return resumes an enabled bridge. Background access is best effort
   through finite UIKit background execution, then pauses on expiration. Never
   claim an always-running iOS server, or add unrelated audio/location/Bluetooth

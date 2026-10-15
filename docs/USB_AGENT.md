@@ -348,3 +348,30 @@ write versions and exports exact action IDs plus characteristic step/choice/unit
 metadata. Bool targets accept numeric 0/1 only on bool formats. Every write retains
 mirrored backups, write-ahead receipts, app/session validation and no-replay rules.
 Migration planning/staging is not bridge retirement or physical command proof.
+
+## Mac menu bar lifecycle
+
+The signed Catalyst app embeds a small native AppKit bundle for its status item
+and window controls. The HomeKit manager and bridge remain in the signed host,
+with the same bundle ID, entitlement, files, authorization and transaction rules.
+Closing the manager hides it; use the house menu icon to reopen it, disconnect
+Agent Access, or quit. Existing connections resume on launch even without an
+active scene. No new connection or write authorization is granted automatically.
+The app must remain running and the Mac awake. iPhone/iPad background limits
+are unchanged. Build the app normally; its Mac-only build phase compiles and
+signs the embedded bundle using the host's selected identity.
+
+For local lifecycle diagnostics, `AgentBridge/mac-runtime.json` reports the
+menu bar, visible-window count, Dock policy, bridge state and timestamp without
+Home data. The file is local runtime state, not a connection authorization.
+
+Validate the native window/menu behavior on Mac alongside the Python tests:
+
+```sh
+xcrun --sdk macosx clang -fobjc-arc -fmodules -framework AppKit \
+  tests/menu_bar_test.m -o /tmp/homekitten-menu-bar-test
+/tmp/homekitten-menu-bar-test
+```
+
+The isolated harness checks close-to-hide, reopening, delegate forwarding and
+busy controls without accessing HomeKit or changing any Home objects.
