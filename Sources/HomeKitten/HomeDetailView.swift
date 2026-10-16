@@ -1235,7 +1235,8 @@ struct AutomationConditionEditor: View {
         Task { @MainActor in
             do {
                 try HomeBackupService.saveDeletionBackup(home: home)
-                let combined = !replaceExisting ? trigger.predicate.map { NSCompoundPredicate(andPredicateWithSubpredicates: [$0, predicate]) } ?? predicate : predicate
+                let appended = !replaceExisting ? trigger.predicate.map { NSCompoundPredicate(andPredicateWithSubpredicates: [$0, predicate]) } ?? predicate : predicate
+                let combined = try NativePredicateReference.flattenConjunctions(appended).predicate
                 try await trigger.updatePredicate(combined)
                 dismiss()
             } catch { status = error.localizedDescription }

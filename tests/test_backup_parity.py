@@ -29,7 +29,7 @@ class BackupParityTests(unittest.TestCase):
                          {'kind':'threshold','characteristicID':self.characteristic,'maxValue':55})
 
     def test_structural_operations_reject_unrelated_fields_and_unsupported_types(self):
-        for op in ('delete_room', 'delete_group', 'delete_zone'):
+        for op in ('delete_room', 'delete_group', 'delete_zone', 'normalize_automation_conditions'):
             base = {'operation':op, 'homeID':self.home, 'objectID':self.service}
             agent.validate_extension(base)
             for key,value in (('name','bad'),('roomIDs',[]),('conditions',{})):

@@ -464,7 +464,7 @@ final class AgentBridge {
               let children = spec.children, !children.isEmpty, children.count <= 32, spec.kind != "not" || children.count == 1 else { throw failure("Use all/any with 1–32 children or not with one child") }
         let predicates = try children.map { try makeCondition($0, home: home, depth: depth + 1) }
         switch spec.kind {
-        case "all": return NSCompoundPredicate(andPredicateWithSubpredicates: predicates)
+        case "all": return try NativePredicateReference.flattenConjunctions(NSCompoundPredicate(andPredicateWithSubpredicates: predicates)).predicate
         case "any": return NSCompoundPredicate(orPredicateWithSubpredicates: predicates)
         default: return NSCompoundPredicate(notPredicateWithSubpredicate: predicates[0])
         }
@@ -496,7 +496,7 @@ final class AgentBridge {
 
     private func describe(_ r: AgentRequest) throws -> String {
         let home = try resolveHome(r)
-        if ["rename_service", "set_service_type", "delete_room", "delete_group", "delete_zone"].contains(r.operation) {
+        if ["normalize_automation_conditions", "rename_service", "set_service_type", "delete_room", "delete_group", "delete_zone"].contains(r.operation) {
             return try describeStructure(r, home: home)
         }
         if r.operation == "remove_bridge" {
@@ -618,7 +618,7 @@ final class AgentBridge {
     }
 
     private func execute(_ r: AgentRequest, home: HMHome) async throws -> String {
-        if ["rename_service", "set_service_type", "delete_room", "delete_group", "delete_zone"].contains(r.operation) {
+        if ["normalize_automation_conditions", "rename_service", "set_service_type", "delete_room", "delete_group", "delete_zone"].contains(r.operation) {
             return try await executeStructure(r, home: home)
         }
         if ["create_group", "update_group", "create_zone", "update_zone", "rename_room", "patch_scene", "remap_automation_references"].contains(r.operation) {
@@ -704,7 +704,8 @@ final class AgentBridge {
                 if let condition = r.conditions { try await event.updatePredicate(makeCondition(condition, home: home)) }
                 else if let condition = r.additionalConditions {
                     let added = try makeCondition(condition, home: home)
-                    let predicate = event.predicate.map { NSCompoundPredicate(andPredicateWithSubpredicates: [$0, added]) } ?? added
+                    let combined = event.predicate.map { NSCompoundPredicate(andPredicateWithSubpredicates: [$0, added]) } ?? added
+                    let predicate = try NativePredicateReference.flattenConjunctions(combined).predicate
                     try await event.updatePredicate(predicate)
                 }
                 else if r.clearConditions == true { try await event.updatePredicate(nil) }
@@ -956,6 +957,10 @@ final class AgentBridge {
         let permitted = r.operation == "set_service_type" ? Set(["id", "sessionID", "operation", "homeID", "objectID", "associatedServiceType"]) : allowed
         guard Set(fields.keys).isSubset(of: permitted) else { throw failure("Unrelated structural change fields") }
         switch r.operation {
+        case "normalize_automation_conditions":
+            guard let target = try trigger(id, in: home) as? HMEventTrigger, let predicate = target.predicate else { throw failure("An event automation with conditions is required") }
+            _ = try NativePredicateReference.flattenConjunctions(predicate)
+            return String(decoding: try JSONSerialization.data(withJSONObject: AutomationInventory.trigger(target), options: [.sortedKeys]), as: UTF8.self)
         case "rename_service":
             let target = try service(id, home: home)
             _ = try newName(r)
@@ -988,6 +993,20 @@ final class AgentBridge {
         _ = try describeStructure(r, home: home)
         let id = r.objectID!
         switch r.operation {
+        case "normalize_automation_conditions":
+            guard let target = try trigger(id, in: home) as? HMEventTrigger, let predicate = target.predicate else { throw failure("Event automation conditions unavailable") }
+            let normalized = try NativePredicateReference.flattenConjunctions(predicate)
+            guard normalized.changed else { return "Condition grouping already canonical; unchanged" }
+            let expected = try JSONSerialization.data(withJSONObject: AutomationInventory.predicateSnapshot(normalized.predicate), options: [.sortedKeys])
+            let enabled = target.isEnabled
+            if enabled { try await target.enable(false) }
+            try await target.updatePredicate(normalized.predicate)
+            guard let read = target.predicate,
+                  try JSONSerialization.data(withJSONObject: AutomationInventory.predicateSnapshot(read), options: [.sortedKeys]) == expected,
+                  !(try NativePredicateReference.flattenConjunctions(read)).changed else { throw failure("Canonical native predicate read-back failed; automation remains disabled") }
+            if enabled { try await target.enable(true) }
+            guard target.isEnabled == enabled else { throw failure("Enabled state read-back failed") }
+            return "Redundant AND groups flattened; every native clause retained and read back"
         case "rename_service":
             let target = try service(id, home: home), name = try newName(r)
             if target.name != name { try await target.updateName(name) }
@@ -1014,7 +1033,7 @@ final class AgentBridge {
         try write(["version": 2, "active": true, "writesAllowed": writesAllowed, "capturedAt": isoNow(), "sessionID": sessionID.uuidString,
                    "liveReadsSupported": true, "membershipWritesVersion": 1, "incrementalSceneWritesVersion": 1,
                    "nativeReferenceWritesVersion": 1, "booleanNormalizationVersion": 1, "migrationPlanVersion": 1,
-                   "thresholdWritesVersion": 1, "structuralWritesVersion": 1, "backupConfigurationVersion": 3, "conditionDiagnosticsVersion": 1, "bridgeRemovalVersion": 1,
+                   "conditionNormalizationVersion": 1, "thresholdWritesVersion": 1, "structuralWritesVersion": 1, "backupConfigurationVersion": 3, "conditionDiagnosticsVersion": 1, "bridgeRemovalVersion": 1,
                    "automationRulesVersion": 1, "automationWritesVersion": 1, "deletionWritesVersion": 1, "conditionCompositionVersion": 1, "automationRulesSource": "HomeKit public API",
                    "valuesAreCached": true, "homes": homes], to: "inventory.json")
     }

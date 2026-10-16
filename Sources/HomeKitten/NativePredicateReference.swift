@@ -4,6 +4,38 @@ import Foundation
 // selected by a trusted in-process resolver; no raw predicates cross the bridge.
 enum NativePredicateReference {
     struct Result { let predicate: NSPredicate; let changed: Bool }
+    // Canonicalize redundant AND nesting only. HomeKit's characteristic factory
+    // uses AND(identity,value) as one semantic leaf: keep that pair intact.
+    // OR/NOT, native time/presence expressions and object constants are untouched.
+    static func flattenConjunctions(_ value: NSPredicate) throws -> Result {
+        guard let root = value as? NSCompoundPredicate, root.compoundPredicateType == .and,
+              !isCharacteristicPair(root) else { return Result(predicate: value, changed: false) }
+        var leaves: [NSPredicate] = []
+        var changed = false
+        func collect(_ predicate: NSPredicate, depth: Int) throws {
+            guard depth <= 64, leaves.count < 256 else { throw failure("Native condition tree exceeds normalization limits") }
+            if let compound = predicate as? NSCompoundPredicate, compound.compoundPredicateType == .and,
+               !isCharacteristicPair(compound) {
+                if depth > 0 { changed = true }
+                guard !compound.subpredicates.isEmpty else { throw failure("Empty conjunction cannot be normalized here") }
+                for child in compound.subpredicates {
+                    guard let child = child as? NSPredicate else { throw failure("Unknown native condition child") }
+                    try collect(child, depth: depth + 1)
+                }
+            } else { leaves.append(predicate) }
+        }
+        try collect(root, depth: 0)
+        return Result(predicate: changed ? NSCompoundPredicate(andPredicateWithSubpredicates: leaves) : value, changed: changed)
+    }
+
+    private static func isCharacteristicPair(_ value: NSCompoundPredicate) -> Bool {
+        guard value.compoundPredicateType == .and, value.subpredicates.count == 2 else { return false }
+        let comparisons = value.subpredicates.compactMap { $0 as? NSComparisonPredicate }
+        guard comparisons.count == 2 else { return false }
+        let keys = comparisons.compactMap { $0.leftExpression.expressionType == .keyPath ? $0.leftExpression.keyPath : nil }
+        return Set(keys) == Set(["characteristic", "characteristicValue"])
+    }
+
     static func rewrite(_ value: NSPredicate, sourceIDs: Set<UUID>, resolver: (Any) -> Any?) throws -> Result {
         if let compound = value as? NSCompoundPredicate {
             let children = try compound.subpredicates.map { child -> Result in

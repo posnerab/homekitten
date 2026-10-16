@@ -48,6 +48,35 @@ let aggregate = try NativePredicateReference.constant(["refs": [original, unrela
 assert(aggregate.changed)
 let refs = (aggregate.value as! [String: Any])["refs"] as! [Any]
 assert(refs[0] as AnyObject === replacement && refs[1] as AnyObject === unrelated)
+let secondGuard = NSPredicate(format: "secondGuard == 0")
+let thirdGuard = NSPredicate(format: "thirdGuard == 0")
+let night = NSCompoundPredicate(orPredicateWithSubpredicates: [time, NSPredicate(format: "sunrise > now()")])
+let nested = NSCompoundPredicate(andPredicateWithSubpredicates: [
+    NSCompoundPredicate(andPredicateWithSubpredicates: [
+        NSCompoundPredicate(andPredicateWithSubpredicates: [night, customPresence, sourceClause]), secondGuard
+    ]), thirdGuard
+])
+let flattened = try NativePredicateReference.flattenConjunctions(nested)
+assert(flattened.changed)
+let flat = flattened.predicate as! NSCompoundPredicate
+assert(flat.compoundPredicateType == .and && flat.subpredicates.count == 5)
+for (index, leaf) in [night, customPresence, sourceClause, secondGuard, thirdGuard].enumerated() {
+    assert(flat.subpredicates[index] as AnyObject === leaf)
+}
+let secondPass = try NativePredicateReference.flattenConjunctions(flat)
+let pairPass = try NativePredicateReference.flattenConjunctions(sourceClause)
+let orPass = try NativePredicateReference.flattenConjunctions(guarded)
+assert(!secondPass.changed && !pairPass.changed && !orPass.changed)
+let bools = ["night", "presence", "shabbosOff", "yomTovOff", "lateNightOff"].map { NSPredicate(format: "%K == YES", $0) }
+let logic = NSCompoundPredicate(andPredicateWithSubpredicates: [
+    NSCompoundPredicate(andPredicateWithSubpredicates: [NSCompoundPredicate(andPredicateWithSubpredicates: Array(bools.prefix(3))), bools[3]]), bools[4]
+])
+let normalizedLogic = try NativePredicateReference.flattenConjunctions(logic).predicate
+for mask in 0..<32 {
+    var input: [String: Bool] = [:]
+    for (i, key) in ["night", "presence", "shabbosOff", "yomTovOff", "lateNightOff"].enumerated() { input[key] = mask & (1 << i) != 0 }
+    assert(logic.evaluate(with: input) == normalizedLogic.evaluate(with: input))
+}
 let a = UUID(), b = UUID(), c = UUID()
 let add = try AgentMembership.desired([a,b], replacement: nil, additions: [c], removals: nil)
 assert(add == Set([a,b,c]))

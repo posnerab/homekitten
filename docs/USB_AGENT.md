@@ -409,3 +409,15 @@ Numeric threshold event recovery requires the updated app capability. Native UI
 backups now embed the full public configuration tree and can export JSON.
 See [Controller backup interoperability](CONTROLLER_BACKUPS.md) for the local
 legacy decoder, private source archive and unresolved API boundaries.
+
+### Canonical native condition grouping
+
+Build 14 / client 1.7.1 adds `conditionNormalizationVersion: 1` and
+`normalize_automation_conditions`, accepting only `operation`, `homeID` and the
+exact automation `objectID`. It flattens redundant AND groups in an existing
+native predicate while keeping characteristic identity/value pairs, OR/NOT,
+solar/time and presence clauses intact. Backups, authorization, transaction
+consumption, disable-edit-verify-enable and no-replay safeguards remain in effect.
+Inventory's separate `conditionGroupingStatus` distinguishes grouping from missing
+reference diagnostics. AND condition writes/appends use the same normalization.
+See [Controller round trips](CONTROLLER_BACKUPS.md#controller-grouped-condition-round-trips-build-14--client-171).

@@ -290,6 +290,8 @@ def scene_patch_recovery(saved, current, home, identifiers=None):
 
 
 def recovery_scope(request, identifier, inventory=None):
+    if request["operation"] == "normalize_automation_conditions":
+        return {"state": "manual", "reason": "Native AND regrouping preserves logic. The original native grouping is retained in the backup; generic declarative recovery cannot replay every native clause."}
     if request["operation"] == "remove_bridge":
         return {"state": "manual", "reason": "Bridge removal deletes its Home pairing and children. Configuration backups are evidence, not an automatic pairing restore."}
     operation = request["operation"]

@@ -26,7 +26,7 @@ from homekit_migration import migration_plan, characteristics, normalize
 
 BUNDLE = "abie.ios.homekitten"
 OPERATIONS = ["rename_accessory", "set_characteristic", "create_scene", "update_scene",
-              "rename_scene", "run_scene", "delete_scene", "delete_automation", "create_timer", "create_event_automation", "update_automation", "create_room", "assign_accessory", "create_group", "update_group", "create_zone", "update_zone", "rename_room", "patch_scene", "remap_automation_references", "remove_bridge", "rename_service", "set_service_type", "delete_room", "delete_group", "delete_zone"]
+              "rename_scene", "run_scene", "delete_scene", "delete_automation", "create_timer", "create_event_automation", "update_automation", "create_room", "assign_accessory", "create_group", "update_group", "create_zone", "update_zone", "rename_room", "patch_scene", "remap_automation_references", "remove_bridge", "rename_service", "set_service_type", "delete_room", "delete_group", "delete_zone", "normalize_automation_conditions"]
 
 
 RULE_FIELDS = {"events", "endEvents", "conditions", "additionalConditions", "clearConditions", "recurrenceWeekdays", "executeOnce"}
@@ -116,7 +116,7 @@ def validate_automation_rules(request):
 
 EXTENSION_CAPABILITIES = {**{op: "membershipWritesVersion" for op in ("create_group", "update_group", "create_zone", "update_zone", "rename_room")},
                           "patch_scene": "incrementalSceneWritesVersion", "remap_automation_references": "nativeReferenceWritesVersion",
-                          "remove_bridge": "bridgeRemovalVersion", **{op: "structuralWritesVersion" for op in ("rename_service", "set_service_type", "delete_room", "delete_group", "delete_zone")}}
+                          "normalize_automation_conditions": "conditionNormalizationVersion", "remove_bridge": "bridgeRemovalVersion", **{op: "structuralWritesVersion" for op in ("rename_service", "set_service_type", "delete_room", "delete_group", "delete_zone")}}
 
 
 def validate_extension(request):
@@ -128,7 +128,7 @@ def validate_extension(request):
         "create_group": {"name", "serviceIDs"}, "update_group": {"objectID", "name", "serviceIDs", "addServiceIDs", "removeServiceIDs"},
         "create_zone": {"name", "roomIDs"}, "update_zone": {"objectID", "name", "roomIDs", "addRoomIDs", "removeRoomIDs"},
         "rename_room": {"objectID", "name"}, "rename_service": {"objectID", "name"}, "set_service_type": {"objectID", "associatedServiceType"},
-        "delete_room": {"objectID"}, "delete_group": {"objectID"}, "delete_zone": {"objectID"}, "patch_scene": {"objectID", "actions", "removeActionIDs", "actionUpdates"},
+        "normalize_automation_conditions": {"objectID"}, "delete_room": {"objectID"}, "delete_group": {"objectID"}, "delete_zone": {"objectID"}, "patch_scene": {"objectID", "actions", "removeActionIDs", "actionUpdates"},
         "remap_automation_references": {"objectID", "referenceMappings"},
         "remove_bridge": {"objectID", "bridgedAccessoryIDs", "auditedOpaqueSceneIDs"}}[operation]
     if set(request) - allowed: raise ValueError("Unrelated fields rejected for " + operation)
@@ -420,7 +420,7 @@ def tool_definitions():
     definitions = [
         {"name": "home_inventory", "description": "Read current HomeKit configuration with UUIDs, automation events, predicate conditions, timing/recurrence rules, and attached actions. Unsupported public-API details are marked. Characteristic values are cached, not fresh sensor reads.",
          "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False}},
-        {"name": "home_change_execute", "description": "Execute one HomeKit change automatically in a app-authorized connection session. A durable checksum-verified inventory backup and write-ahead receipt are required before submission; returns backupID and recovery assessment. update_scene replaces ALL existing scene actions. create_timer and create_event_automation default to disabled. Event/condition arrays replace existing rules; conditions are declarative all/any/not/characteristic/presence trees. additionalConditions ANDs with the existing native predicate without reconstructing or dropping any clause. Updates disable the automation while editing; failures may leave it disabled. delete_scene and delete_automation require objectID and accept no other change fields. Deletion is permanent and backed up first. Automation deletion keeps shared scenes; its HomeKit-owned actions belong to the deleted rule. Scenes referenced by any automation or owned by HomeKit cannot be deleted. rename_service changes one exact service name; set_service_type changes switch/outlet presentation. delete_room, delete_group and delete_zone require an empty unreferenced object and never cascade. remove_bridge requires complete bridgedAccessoryIDs and auditedOpaqueSceneIDs lists, rejects remaining scene/group/native-rule references, and permanently removes the bridge pairing and children without an automatic inverse.",
+        {"name": "home_change_execute", "description": "Execute one HomeKit change automatically in a app-authorized connection session. A durable checksum-verified inventory backup and write-ahead receipt are required before submission; returns backupID and recovery assessment. update_scene replaces ALL existing scene actions. create_timer and create_event_automation default to disabled. Event/condition arrays replace existing rules; conditions are declarative all/any/not/characteristic/presence trees. additionalConditions ANDs with the existing native predicate without reconstructing or dropping any clause. Updates disable the automation while editing; failures may leave it disabled. delete_scene and delete_automation require objectID and accept no other change fields. Deletion is permanent and backed up first. Automation deletion keeps shared scenes; its HomeKit-owned actions belong to the deleted rule. Scenes referenced by any automation or owned by HomeKit cannot be deleted. normalize_automation_conditions flattens redundant native AND groups while preserving characteristic identity/value pairs, OR/NOT and all native clauses; accepts only target UUID. rename_service changes one exact service name; set_service_type changes switch/outlet presentation. delete_room, delete_group and delete_zone require an empty unreferenced object and never cascade. remove_bridge requires complete bridgedAccessoryIDs and auditedOpaqueSceneIDs lists, rejects remaining scene/group/native-rule references, and permanently removes the bridge pairing and children without an automatic inverse.",
          "inputSchema": {"type": "object", "required": ["operation", "homeID"],
                          "additionalProperties": False, "$defs": {"condition": condition}, "properties": {
                              "operation": {"type": "string", "enum": OPERATIONS},
@@ -485,7 +485,7 @@ def tool_definitions():
 def dispatch(client, method, params):
     if method == "initialize":
         return {"protocolVersion": params.get("protocolVersion", "2024-11-05"),
-                "capabilities": {"tools": {}}, "serverInfo": {"name": "homekitten-usb", "version": "1.7.0"}}
+                "capabilities": {"tools": {}}, "serverInfo": {"name": "homekitten-usb", "version": "1.7.1"}}
     if method == "ping":
         return {}
     if method == "tools/list":

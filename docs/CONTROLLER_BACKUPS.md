@@ -77,3 +77,30 @@ Configuration read-back does not verify physical execution. New deletion/service
 and threshold capabilities are validated by unit/build checks and advertised by
 `structuralWritesVersion: 1` / `thresholdWritesVersion: 1`; do not create/delete
 live Home objects just to test availability. Refresh MCP clients after updating.
+
+## Controller grouped-condition round trips (build 14 / client 1.7.1)
+
+A valid HomeKit predicate can still fail another app's backup round trip. In the
+observed Controller backup, repeatedly nested AND groups retained only shallow
+characteristic conditions and omitted deeper time/presence/switch clauses. A clean
+`conditionIssues` list describes semantic reference/comparison checks; it does not
+establish Controller export compatibility.
+
+`normalize_automation_conditions` accepts only `homeID` and exact automation
+`objectID` alongside the operation. It flattens redundant native AND nesting,
+retaining characteristic identity/value factory pairs as intact leaves. OR, NOT,
+solar/time, presence, comparison flags and object constants remain untouched; no
+raw predicate or reconstruction passes through the client. The app backs up first,
+disables the target during the update, verifies the complete native predicate and
+then restores its enabled state. No-op canonical rules are left untouched. Failed
+writes/read-back can leave a trigger disabled; retrieve its transaction before any
+retry. Original grouping is retained as evidence; generic rule recovery cannot
+replay every native clause.
+
+Inventory advertises `conditionNormalizationVersion: 1` and includes
+`conditionGroupingStatus` (`nestedConjunctions`, `canonical`, `noPredicate`, or
+`unsupportedNormalization`). `nestedConjunctions` is a compatibility cue, not a
+claim that HomeKit logic is invalid or that every third-party app will fail.
+Future MCP AND writes and native condition appends apply the same canonicalization
+so redundant wrappers do not accumulate again. Confirm Controller's actual rule
+view and a newly created backup separately from HomeKit configuration read-back.

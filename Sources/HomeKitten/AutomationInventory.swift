@@ -62,6 +62,11 @@ enum AutomationInventory {
             result["predicate"] = tree ?? (NSNull() as Any)
             result["conditionSummary"] = tree.map { AutomationRules.conditionSummary($0) } ?? "No conditions"
             result["conditionIssues"] = tree.map { AutomationRules.conditionIssues($0) } ?? []
+            if let predicate = event.predicate {
+                do {
+                    result["conditionGroupingStatus"] = try NativePredicateReference.flattenConjunctions(predicate).changed ? "nestedConjunctions" : "canonical"
+                } catch { result["conditionGroupingStatus"] = "unsupportedNormalization" }
+            } else { result["conditionGroupingStatus"] = "noPredicate" }
             result["recurrences"] = event.recurrences.map { $0.map { AutomationRules.components($0) } } ?? (NSNull() as Any)
             result["executeOnce"] = event.executeOnce
             result["activationStateRawValue"] = event.triggerActivationState.rawValue
@@ -128,6 +133,10 @@ enum AutomationInventory {
             result["supported"] = false
         }
         return result
+    }
+
+    static func predicateSnapshot(_ predicate: NSPredicate) -> [String: Any] {
+        AutomationRules.predicate(predicate, object: object)
     }
 
     static func conditionSummary(_ predicate: NSPredicate) -> String {

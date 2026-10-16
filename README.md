@@ -170,3 +170,9 @@ room/group/zone deletion, numeric threshold events and service recovery.
 and archives the exact source plus decoded YAML in the verified primary/mirror
 backup store. No HomeKit writes or name-based UUID substitution occur during
 import. See [coverage and remaining boundaries](docs/CONTROLLER_BACKUPS.md).
+
+Build 14 / client 1.7.1 additionally canonicalizes redundant native AND grouping
+without reconstructing or dropping time, presence, OR or characteristic clauses.
+The exact-UUID `normalize_automation_conditions` operation and
+`conditionGroupingStatus` distinguish HomeKit rule validity from Controller backup
+round-trip compatibility. New AND writes/appends avoid accumulating these wrappers.
