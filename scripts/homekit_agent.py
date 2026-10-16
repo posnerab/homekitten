@@ -9,6 +9,7 @@ appear on protocol stdout. The app grants write access for its remembered connec
 import argparse
 import datetime
 import json
+import math
 import os
 import shutil
 import pathlib
@@ -25,7 +26,7 @@ from homekit_migration import migration_plan, characteristics, normalize
 
 BUNDLE = "abie.ios.homekitten"
 OPERATIONS = ["rename_accessory", "set_characteristic", "create_scene", "update_scene",
-              "rename_scene", "run_scene", "delete_scene", "delete_automation", "create_timer", "create_event_automation", "update_automation", "create_room", "assign_accessory", "create_group", "update_group", "create_zone", "update_zone", "rename_room", "patch_scene", "remap_automation_references", "remove_bridge"]
+              "rename_scene", "run_scene", "delete_scene", "delete_automation", "create_timer", "create_event_automation", "update_automation", "create_room", "assign_accessory", "create_group", "update_group", "create_zone", "update_zone", "rename_room", "patch_scene", "remap_automation_references", "remove_bridge", "rename_service", "set_service_type", "delete_room", "delete_group", "delete_zone"]
 
 
 RULE_FIELDS = {"events", "endEvents", "conditions", "additionalConditions", "clearConditions", "recurrenceWeekdays", "executeOnce"}
@@ -62,7 +63,7 @@ def validate_automation_rules(request):
             if not isinstance(event, dict):
                 raise ValueError("Event must be an object")
             kind = event.get("kind")
-            allowed = {"characteristic": {"kind", "characteristicID", "value"}, "calendar": {"kind", "hour", "minute"},
+            allowed = {"threshold": {"kind", "characteristicID", "minValue", "maxValue"}, "characteristic": {"kind", "characteristicID", "value"}, "calendar": {"kind", "hour", "minute"},
                        "significant_time": {"kind", "significantEvent", "offsetMinutes"}, "presence": {"kind", "presenceEvent", "presenceUser"},
                        "duration": {"kind", "durationSeconds"}}.get(kind)
             if allowed is None or not set(event) <= allowed:
@@ -71,6 +72,11 @@ def validate_automation_rules(request):
                 event["characteristicID"] = str(uuid.UUID(event["characteristicID"])).upper()
                 if type(event.get("value")) not in (bool, int, float, str):
                     raise ValueError("Characteristic event requires a scalar value")
+            elif kind == "threshold":
+                event["characteristicID"] = str(uuid.UUID(event["characteristicID"])).upper()
+                bounds = [event[k] for k in ("minValue", "maxValue") if k in event]
+                if not bounds or any(type(v) not in (int, float) or not math.isfinite(v) for v in bounds) or (len(bounds) == 2 and bounds[0] > bounds[1]):
+                    raise ValueError("Threshold requires finite ordered numeric bounds")
             elif kind == "calendar":
                 if type(event.get("hour")) is not int or not 0 <= event["hour"] <= 23 or type(event.get("minute")) is not int or not 0 <= event["minute"] <= 59:
                     raise ValueError("Calendar event requires valid hour/minute")
@@ -110,7 +116,7 @@ def validate_automation_rules(request):
 
 EXTENSION_CAPABILITIES = {**{op: "membershipWritesVersion" for op in ("create_group", "update_group", "create_zone", "update_zone", "rename_room")},
                           "patch_scene": "incrementalSceneWritesVersion", "remap_automation_references": "nativeReferenceWritesVersion",
-                          "remove_bridge": "bridgeRemovalVersion"}
+                          "remove_bridge": "bridgeRemovalVersion", **{op: "structuralWritesVersion" for op in ("rename_service", "set_service_type", "delete_room", "delete_group", "delete_zone")}}
 
 
 def validate_extension(request):
@@ -121,13 +127,16 @@ def validate_extension(request):
     allowed |= {
         "create_group": {"name", "serviceIDs"}, "update_group": {"objectID", "name", "serviceIDs", "addServiceIDs", "removeServiceIDs"},
         "create_zone": {"name", "roomIDs"}, "update_zone": {"objectID", "name", "roomIDs", "addRoomIDs", "removeRoomIDs"},
-        "rename_room": {"objectID", "name"}, "patch_scene": {"objectID", "actions", "removeActionIDs", "actionUpdates"},
+        "rename_room": {"objectID", "name"}, "rename_service": {"objectID", "name"}, "set_service_type": {"objectID", "associatedServiceType"},
+        "delete_room": {"objectID"}, "delete_group": {"objectID"}, "delete_zone": {"objectID"}, "patch_scene": {"objectID", "actions", "removeActionIDs", "actionUpdates"},
         "remap_automation_references": {"objectID", "referenceMappings"},
         "remove_bridge": {"objectID", "bridgedAccessoryIDs", "auditedOpaqueSceneIDs"}}[operation]
     if set(request) - allowed: raise ValueError("Unrelated fields rejected for " + operation)
-    if operation.startswith("create_") or operation == "rename_room":
+    if operation.startswith("create_") or operation in ("rename_room", "rename_service"):
         if not isinstance(request.get("name"), str) or not request["name"].strip() or len(request["name"].strip()) > 128: raise ValueError("Name must contain 1–128 characters")
     if not operation.startswith("create_") and not request.get("objectID"): raise ValueError("Exact target objectID required")
+    if operation == "set_service_type" and request.get("associatedServiceType") not in ("", "00000040-0000-1000-8000-0026BB765291", "00000043-0000-1000-8000-0026BB765291", "00000047-0000-1000-8000-0026BB765291"):
+        raise ValueError("Associated service type must be fan, lightbulb, outlet or empty string")
     for field in ("serviceIDs", "addServiceIDs", "removeServiceIDs", "roomIDs", "addRoomIDs", "removeRoomIDs", "removeActionIDs", "bridgedAccessoryIDs", "auditedOpaqueSceneIDs"):
         if field in request:
             values = request[field]
@@ -258,6 +267,8 @@ class Client:
             return isinstance(node, dict) and (node.get("kind") == "presence" or any(needs_composition(child) for child in node.get("children", [])))
         if ("additionalConditions" in request or needs_composition(request.get("conditions"))) and inventory.get("conditionCompositionVersion", 0) < 1:
             raise RuntimeError("This app build does not support condition composition; install the updated HomeKitten app.")
+        if any(e.get("kind") == "threshold" for key in ("events", "endEvents") for e in request.get(key, [])) and inventory.get("thresholdWritesVersion", 0) < 1:
+            raise RuntimeError("Install the signed app with thresholdWritesVersion")
         capability = EXTENSION_CAPABILITIES.get(request["operation"])
         if capability and inventory.get(capability, 0) < 1:
             raise RuntimeError("Install the signed HomeKitten app with " + capability)
@@ -385,6 +396,8 @@ class LocalClient(Client):
 def tool_definitions():
     scalar = {"type": ["boolean", "number", "string"]}
     event = {"oneOf": [
+        {"type": "object", "additionalProperties": False, "required": ["kind", "characteristicID"], "anyOf": [{"required": ["minValue"]}, {"required": ["maxValue"]}], "properties": {
+            "kind": {"const": "threshold"}, "characteristicID": {"type": "string", "format": "uuid"}, "minValue": {"type": "number"}, "maxValue": {"type": "number"}}},
         {"type": "object", "additionalProperties": False, "required": ["kind", "characteristicID", "value"], "properties": {
             "kind": {"const": "characteristic"}, "characteristicID": {"type": "string", "format": "uuid"}, "value": scalar}},
         {"type": "object", "additionalProperties": False, "required": ["kind", "hour", "minute"], "properties": {
@@ -407,10 +420,11 @@ def tool_definitions():
     definitions = [
         {"name": "home_inventory", "description": "Read current HomeKit configuration with UUIDs, automation events, predicate conditions, timing/recurrence rules, and attached actions. Unsupported public-API details are marked. Characteristic values are cached, not fresh sensor reads.",
          "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False}},
-        {"name": "home_change_execute", "description": "Execute one HomeKit change automatically in a app-authorized connection session. A durable checksum-verified inventory backup and write-ahead receipt are required before submission; returns backupID and recovery assessment. update_scene replaces ALL existing scene actions. create_timer and create_event_automation default to disabled. Event/condition arrays replace existing rules; conditions are declarative all/any/not/characteristic/presence trees. additionalConditions ANDs with the existing native predicate without reconstructing or dropping any clause. Updates disable the automation while editing; failures may leave it disabled. delete_scene and delete_automation require objectID and accept no other change fields. Deletion is permanent and backed up first. Automation deletion keeps shared scenes; its HomeKit-owned actions belong to the deleted rule. Scenes referenced by any automation or owned by HomeKit cannot be deleted. remove_bridge requires complete bridgedAccessoryIDs and auditedOpaqueSceneIDs lists, rejects remaining scene/group/native-rule references, and permanently removes the bridge pairing and children without an automatic inverse.",
+        {"name": "home_change_execute", "description": "Execute one HomeKit change automatically in a app-authorized connection session. A durable checksum-verified inventory backup and write-ahead receipt are required before submission; returns backupID and recovery assessment. update_scene replaces ALL existing scene actions. create_timer and create_event_automation default to disabled. Event/condition arrays replace existing rules; conditions are declarative all/any/not/characteristic/presence trees. additionalConditions ANDs with the existing native predicate without reconstructing or dropping any clause. Updates disable the automation while editing; failures may leave it disabled. delete_scene and delete_automation require objectID and accept no other change fields. Deletion is permanent and backed up first. Automation deletion keeps shared scenes; its HomeKit-owned actions belong to the deleted rule. Scenes referenced by any automation or owned by HomeKit cannot be deleted. rename_service changes one exact service name; set_service_type changes switch/outlet presentation. delete_room, delete_group and delete_zone require an empty unreferenced object and never cascade. remove_bridge requires complete bridgedAccessoryIDs and auditedOpaqueSceneIDs lists, rejects remaining scene/group/native-rule references, and permanently removes the bridge pairing and children without an automatic inverse.",
          "inputSchema": {"type": "object", "required": ["operation", "homeID"],
                          "additionalProperties": False, "$defs": {"condition": condition}, "properties": {
                              "operation": {"type": "string", "enum": OPERATIONS},
+                             "associatedServiceType": {"type": "string", "description": "set_service_type only: fan/lightbulb/outlet service type UUID, or empty string to clear"},
                              "homeID": {"type": "string", "format": "uuid"},
                              "objectID": {"type": "string", "format": "uuid"},
                              "roomID": {"type": "string", "format": "uuid", "description": "Destination room UUID for assign_accessory; must belong to the selected Home."},
@@ -448,12 +462,12 @@ def tool_definitions():
     ]
     recovery_properties = {"identifier": {"type": "string", "format": "uuid"},
                            "home_id": {"type": "string", "format": "uuid"},
-                           "kind": {"enum": ["accessory", "scene", "automation", "characteristic", "group", "zone", "room", "scene_patch"]},
+                           "kind": {"enum": ["accessory", "scene", "automation", "characteristic", "group", "zone", "room", "scene_patch", "service"]},
                            "object_id": {"type": "string", "format": "uuid"},
                            "characteristic_ids": {"type": "array", "minItems": 1, "uniqueItems": True, "items": {"type": "string", "format": "uuid"}},
                            "fields": {"type": "array", "minItems": 1, "uniqueItems": True, "items": {"enum": [
                                "name", "roomID", "actions", "value", "enabled", "sceneIDs", "events", "endEvents", "conditions",
-                               "additionalConditions", "clearConditions", "recurrenceWeekdays", "executeOnce", "serviceIDs", "roomIDs"]}}}
+                               "additionalConditions", "clearConditions", "recurrenceWeekdays", "executeOnce", "serviceIDs", "roomIDs", "associatedServiceType"]}}}
     for name, description, properties, required, readonly in [
         ("home_backup_create", "Save and checksum-verify a durable private inventory backup. Values are cached; public API limitations are recorded.", {"label": {"type": "string"}}, [], True),
         ("home_backup_list", "List private agent backups and integrity status without dumping Home metadata.", {}, [], True),
@@ -471,7 +485,7 @@ def tool_definitions():
 def dispatch(client, method, params):
     if method == "initialize":
         return {"protocolVersion": params.get("protocolVersion", "2024-11-05"),
-                "capabilities": {"tools": {}}, "serverInfo": {"name": "homekitten-usb", "version": "1.6.0"}}
+                "capabilities": {"tools": {}}, "serverInfo": {"name": "homekitten-usb", "version": "1.7.0"}}
     if method == "ping":
         return {}
     if method == "tools/list":

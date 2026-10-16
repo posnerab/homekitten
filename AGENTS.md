@@ -116,7 +116,9 @@ operations and exact request fields are documented in `docs/USB_AGENT.md`.
 enabled. Event rule edits require `automationWritesVersion: 1`, validate the
 complete requested replacement, and disable the trigger while editing. A failed
 multi-step edit may leave it disabled. General accessory pairing, Home/user management,
-and standalone accessory/room/Home/user deletion remain unavailable. Populated
+and standalone accessory/Home/user deletion remain unavailable. Build 13 adds guarded
+empty room/group/zone deletion, service rename/presentation writes and threshold
+event writes; see `docs/CONTROLLER_BACKUPS.md` and the current agent contract. Populated
 bridge retirement requires `bridgeRemovalVersion: 1`, complete child UUIDs,
 the preceding opaque-scene audit, and zero remaining scene/group/native-rule
 references; see `docs/STAGED_MIGRATION.md`. Scene and automation

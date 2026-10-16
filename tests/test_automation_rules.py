@@ -56,6 +56,55 @@ assert(JSONSerialization.isValidJSONObject(exported))
 let data = try JSONSerialization.data(withJSONObject: exported)
 let decoded = try JSONSerialization.jsonObject(with: data)
 assert(decoded is [String: Any])
+
+func characteristic(_ name: String) -> [String: Any] {
+    ["kind": "characteristic", "id": name, "accessoryName": name, "name": "Power State", "type": "00000025-0000-1000-8000-0026BB765291"]
+}
+func comparison(_ key: String, _ value: Any) -> [String: Any] {
+    ["kind": "comparison", "modifier": "direct", "optionsRawValue": 0, "operator": "equal", "format": key,
+     "left": ["kind": "keyPath", "keyPath": key], "right": ["kind": "constant", "value": value]]
+}
+func compound(_ op: String, _ children: [[String: Any]]) -> [String: Any] {
+    ["kind": "compound", "operator": op, "children": children]
+}
+let shabbos = compound("and", [comparison("characteristic", characteristic("Shabbos")), comparison("characteristicValue", false)])
+let yomTov = compound("and", [comparison("characteristic", characteristic("Yom Tov")), comparison("characteristicValue", false)])
+let both = compound("and", [shabbos, yomTov])
+let summary = AutomationRules.conditionSummary(both)
+assert(summary.contains("Shabbos · Power State is off") && summary.contains("Yom Tov · Power State is off"))
+assert(summary.contains(" AND "))
+assert(AutomationRules.conditionIssues(both).isEmpty)
+let mixed = compound("or", [both, compound("not", [shabbos])])
+assert(AutomationRules.conditionSummary(mixed).contains(" OR "))
+assert(AutomationRules.conditionSummary(mixed).contains("NOT"))
+let malformed = compound("and", [comparison("characteristic", characteristic("Yom Tov")), shabbos])
+let issues = AutomationRules.conditionIssues(malformed)
+assert(issues.count == 1 && issues[0]["code"] as! String == "unpairedCharacteristicReference")
+assert(AutomationRules.conditionSummary(malformed).contains("Yom Tov: accessory reference without a value comparison"))
+// Two references and one value must never borrow a sibling's value.
+let ambiguous = compound("and", [comparison("characteristic", characteristic("Shabbos")), comparison("characteristic", characteristic("Yom Tov")), comparison("characteristicValue", false)])
+assert(AutomationRules.characteristicPair(ambiguous) == nil)
+assert(AutomationRules.conditionIssues(ambiguous).count == 3)
+assert(AutomationRules.conditionSummary(tree).contains("humidity >= 65"))
+let legacy = compound("and", [comparison("characteristic", ["kAccessoryUUID": "missing-uuid", "kServiceInstanceID": 9, "kCharacteristicInstanceID": 10]), comparison("characteristicValue", false)])
+assert(AutomationRules.conditionIssues(legacy).count == 1)
+assert(AutomationRules.conditionIssues(legacy)[0]["code"] as! String == "unresolvedAccessoryReference")
+assert(AutomationRules.conditionSummary(legacy).contains("Unavailable accessory [missing-uuid]"))
+let nativePair = NSCompoundPredicate(andPredicateWithSubpredicates: [
+    NSComparisonPredicate(leftExpression: NSExpression(forKeyPath: "characteristic"), rightExpression: NSExpression(forConstantValue: ref), modifier: .direct, type: .equalTo, options: []),
+    NSPredicate(format: "characteristicValue == %@", NSNumber(value: false))
+])
+let nativeTree = AutomationRules.predicate(nativePair, object: { value in
+    value as AnyObject === ref ? characteristic("Shabbos") : nil
+})
+assert(AutomationRules.characteristicPair(nativeTree) != nil)
+assert(AutomationRules.conditionIssues(nativeTree).isEmpty)
+assert(AutomationRules.conditionSummary(nativeTree) == "Shabbos · Power State is off")
+let json = try BackupJSON(object: ["rules": both, "unknown": unknown, "zones": [], "big": NSNumber(value: UInt64.max), "bool": true, "null": NSNull()])
+let roundTrip = try JSONSerialization.jsonObject(with: JSONEncoder().encode(json)) as! [String: Any]
+assert((roundTrip["big"] as! NSNumber).uint64Value == UInt64.max)
+assert(roundTrip["bool"] as! Bool && roundTrip["null"] is NSNull)
+assert((roundTrip["unknown"] as! [String: Any])["supported"] as! Bool == false)
 print("Automation rule serialization passed")
 '''
         with tempfile.TemporaryDirectory() as temp:

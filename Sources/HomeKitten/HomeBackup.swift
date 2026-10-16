@@ -12,6 +12,8 @@ struct HomeBackup: Codable, Identifiable, Sendable {
     let scenes: [BackupScene]
     let groups: [BackupGroup]
     let automations: [BackupAutomation]
+    var configurationVersion: Int? = nil
+    var configuration: BackupJSON? = nil
 }
 
 struct BackupAccessory: Codable, Identifiable, Sendable {
@@ -47,8 +49,7 @@ enum BackupValue: Codable, Hashable, Sendable {
     case bool(Bool), integer(Int), double(Double), string(String)
 
     init?(_ value: NSCopying) {
-        if let value = value as? Bool { self = .bool(value) }
-        else if let value = value as? NSNumber {
+        if let value = value as? NSNumber {
             if CFGetTypeID(value) == CFBooleanGetTypeID() { self = .bool(value.boolValue) }
             else if value.doubleValue.rounded() == value.doubleValue { self = .integer(value.intValue) }
             else { self = .double(value.doubleValue) }
@@ -77,6 +78,7 @@ struct BackupScene: Codable, Identifiable, Sendable {
     let id: UUID
     let name: String
     let actions: [BackupSceneAction]
+    var unsupportedActionCount: Int? = nil
 }
 
 struct BackupAutomation: Codable, Identifiable, Sendable {
@@ -91,11 +93,11 @@ struct BackupAutomation: Codable, Identifiable, Sendable {
 
 @MainActor
 enum HomeBackupService {
-    static func makeBackup(home: HMHome) -> HomeBackup {
+    static func makeBackup(home: HMHome) throws -> HomeBackup {
         let bridgeByAccessoryID = Dictionary(uniqueKeysWithValues: home.accessories.flatMap { bridge in
             bridge.bridgedAccessories.map { child in (child.uniqueIdentifier, bridge) }
         })
-        return HomeBackup(
+        var backup = HomeBackup(
             id: UUID(), createdAt: Date(), homeID: home.uniqueIdentifier, homeName: home.name,
             accessories: home.accessories.map {
                 let bridge = bridgeByAccessoryID[$0.uniqueIdentifier]
@@ -118,7 +120,7 @@ enum HomeBackupService {
                     return BackupSceneAction(accessoryID: accessory.uniqueIdentifier, serviceID: service.uniqueIdentifier,
                                              characteristicID: action.characteristic.uniqueIdentifier, value: value)
                 }
-                return BackupScene(id: scene.uniqueIdentifier, name: scene.name, actions: actions)
+                return BackupScene(id: scene.uniqueIdentifier, name: scene.name, actions: actions, unsupportedActionCount: scene.actions.count - actions.count)
             }.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending },
             groups: home.serviceGroups.map { group in
                 BackupGroup(id: group.uniqueIdentifier, name: group.name, services: group.services.compactMap { service in
@@ -133,22 +135,36 @@ enum HomeBackupService {
                                         sceneIDs: scenes.map(\.uniqueIdentifier), sceneNames: scenes.map(\.name))
             }.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
         )
+        // This tree includes zones, complete services/characteristics, owned scenes,
+        // unsupported markers and every public automation rule. Never compactMap it.
+        backup.configurationVersion = 3
+        // The configuration serializer emits JSON-safe values only.
+        backup.configuration = try BackupJSON(object: AutomationInventory.configuration(home))
+        return backup
     }
 
     static func save(_ backup: HomeBackup) throws {
         let directory = try backupDirectory()
         let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]; encoder.dateEncodingStrategy = .iso8601
-        try encoder.encode(backup).write(to: directory.appendingPathComponent("\(backup.id.uuidString).json"), options: .atomic)
+        let url = directory.appendingPathComponent("\(backup.id.uuidString).json")
+        try encoder.encode(backup).write(to: url, options: .atomic)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
     }
 
     // Retain public-API rule details as evidence; event rules cannot all be restored automatically.
     static func saveDeletionBackup(home: HMHome) throws {
-        let backup = makeBackup(home: home)
+        let backup = try makeBackup(home: home)
         try save(backup)
         let rules: [String: Any] = ["homeID": home.uniqueIdentifier.uuidString,
                                    "automations": home.triggers.map { AutomationInventory.trigger($0) }]
         try JSONSerialization.data(withJSONObject: rules, options: [.prettyPrinted, .sortedKeys])
             .write(to: try backupDirectory().appendingPathComponent("\(backup.id.uuidString).rules.json"), options: .atomic)
+    }
+
+    static func exportURL(_ backup: HomeBackup) throws -> URL {
+        let url = try backupDirectory().appendingPathComponent("\(backup.id.uuidString).json")
+        guard FileManager.default.fileExists(atPath: url.path) else { throw RestoreError.noResult }
+        return url
     }
 
     static func load() throws -> [HomeBackup] {
@@ -162,63 +178,65 @@ enum HomeBackupService {
 
     static func restore(_ item: BackupAccessory, to home: HMHome) async throws {
         guard let accessory = home.accessories.first(where: { $0.uniqueIdentifier == item.id }) else { throw RestoreError.accessoryUnavailable }
+        let destination = allRooms(home).first { $0.uniqueIdentifier == item.roomID }
+        guard item.roomID == nil || destination != nil else { throw RestoreError.missingReference }
         if accessory.name != item.name { try await updateName(accessory, item.name) }
-        if let room = room(id: item.roomID, name: item.roomName, in: home), accessory.room?.uniqueIdentifier != room.uniqueIdentifier {
-            try await assign(accessory, to: room, in: home)
+        if let destination, accessory.room?.uniqueIdentifier != destination.uniqueIdentifier {
+            try await assign(accessory, to: destination, in: home)
         }
     }
 
     static func restore(_ item: BackupRoom, to home: HMHome) async throws {
-        if let existing = allRooms(home).first(where: { $0.uniqueIdentifier == item.id }) ?? home.rooms.first(where: { $0.name == item.name }) {
-            if existing.name != item.name { try await updateName(existing, item.name) }
-        } else { _ = try await addRoom(item.name, to: home) }
+        guard let existing = allRooms(home).first(where: { $0.uniqueIdentifier == item.id }) else { throw RestoreError.missingReference }
+        if existing.name != item.name { try await updateName(existing, item.name) }
     }
 
     static func restore(_ item: BackupGroup, to home: HMHome) async throws {
-        let existing = home.serviceGroups.first(where: { $0.uniqueIdentifier == item.id })
-            ?? home.serviceGroups.first(where: { $0.name == item.name })
-        let group: HMServiceGroup
-        if let existing { group = existing } else { group = try await addGroup(item.name, to: home) }
-        if group.name != item.name { try await updateName(group, item.name) }
+        guard let group = home.serviceGroups.first(where: { $0.uniqueIdentifier == item.id }) else { throw RestoreError.missingReference }
         let desired = Set(item.services)
-        for service in group.services where !desired.contains(reference(service)) { try await remove(service, from: group) }
-        for ref in desired where !group.services.contains(where: { reference($0) == ref }) {
-            if let service = service(ref, in: home) { try await add(service, to: group) }
+        let members = try desired.map { ref -> HMService in
+            guard let member = service(ref, in: home) else { throw RestoreError.missingReference }
+            return member
         }
+        if group.name != item.name { try await updateName(group, item.name) }
+        for member in members where !group.services.contains(where: { $0.uniqueIdentifier == member.uniqueIdentifier }) { try await add(member, to: group) }
+        for member in group.services where !desired.contains(reference(member)) { try await remove(member, from: group) }
     }
 
     static func restore(_ item: BackupScene, to home: HMHome) async throws {
-        let existing = home.actionSets.first(where: { $0.uniqueIdentifier == item.id })
-            ?? home.actionSets.first(where: { $0.name == item.name })
-        let scene: HMActionSet
-        if let existing { scene = existing } else { scene = try await addScene(item.name, to: home) }
+        guard let scene = home.actionSets.first(where: { $0.uniqueIdentifier == item.id }),
+              scene.actionSetType == HMActionSetTypeUserDefined,
+              item.unsupportedActionCount == 0, !item.actions.isEmpty,
+              scene.actions.allSatisfy({ $0 is HMCharacteristicWriteAction<NSCopying> }) else { throw RestoreError.incompleteScene }
+        // Resolve the complete backup before the first removal. No silent skip or name match.
+        let actions = try item.actions.map { action -> HMCharacteristicWriteAction<NSCopying> in
+            guard let c = characteristic(action, in: home), c.properties.contains(HMCharacteristicPropertyWritable) else { throw RestoreError.missingReference }
+            return HMCharacteristicWriteAction<NSCopying>(characteristic: c, targetValue: action.value.homeKitValue)
+        }
         if scene.name != item.name { try await updateName(scene, item.name) }
         for action in scene.actions { try await remove(action, from: scene) }
-        for action in item.actions {
-            guard let characteristic = characteristic(action, in: home) else { continue }
-            try await add(HMCharacteristicWriteAction<NSCopying>(characteristic: characteristic, targetValue: action.value.homeKitValue), to: scene)
-        }
+        for action in actions { try await add(action, to: scene) }
     }
 
     static func restore(_ item: BackupAutomation, to home: HMHome) async throws {
-        var trigger = home.triggers.first(where: { $0.uniqueIdentifier == item.id }) ?? home.triggers.first(where: { $0.name == item.name })
-        if trigger == nil, item.kind == "Timer", let fireDate = item.fireDate {
-            let created = HMTimerTrigger(name: item.name, fireDate: fireDate, recurrence: nil)
-            try await add(created, to: home); trigger = created
+        guard let trigger = home.triggers.first(where: { $0.uniqueIdentifier == item.id }) else { throw RestoreError.missingReference }
+        var available = home.actionSets
+        for scene in home.triggers.flatMap(\.actionSets) where !available.contains(where: { $0.uniqueIdentifier == scene.uniqueIdentifier }) { available.append(scene) }
+        let desiredScenes = try item.sceneIDs.map { id -> HMActionSet in
+            guard let scene = available.first(where: { $0.uniqueIdentifier == id }) else { throw RestoreError.missingReference }
+            return scene
         }
-        guard let trigger else { throw RestoreError.automationCannotBeRecreated(item.kind) }
+        let desiredIDs = Set(item.sceneIDs)
+        if trigger.isEnabled { try await enable(trigger, false) }
         if trigger.name != item.name { try await updateName(trigger, item.name) }
-        if trigger.isEnabled != item.enabled { try await enable(trigger, item.enabled) }
-        let desiredScenes = item.sceneIDs.compactMap { id in home.actionSets.first(where: { $0.uniqueIdentifier == id }) }
-            + item.sceneNames.compactMap { name in home.actionSets.first(where: { $0.name == name }) }
-        let desiredIDs = Set(desiredScenes.map(\.uniqueIdentifier))
-        for scene in trigger.actionSets where !desiredIDs.contains(scene.uniqueIdentifier) { try await remove(scene, from: trigger) }
         for scene in desiredScenes where !trigger.actionSets.contains(where: { $0.uniqueIdentifier == scene.uniqueIdentifier }) { try await add(scene, to: trigger) }
+        for scene in trigger.actionSets where !desiredIDs.contains(scene.uniqueIdentifier) { try await remove(scene, from: trigger) }
+        if item.enabled { try await enable(trigger, true) }
     }
 
     static func differs(_ item: BackupAccessory, from home: HMHome) -> Bool {
         guard let current = home.accessories.first(where: { $0.uniqueIdentifier == item.id }) else { return true }
-        return current.name != item.name || current.room?.name != item.roomName
+        return current.name != item.name || current.room?.uniqueIdentifier != item.roomID
     }
     static func differs(_ item: BackupRoom, from home: HMHome) -> Bool { !allRooms(home).contains { $0.uniqueIdentifier == item.id && $0.name == item.name } }
     static func differs(_ item: BackupGroup, from home: HMHome) -> Bool {
@@ -244,6 +262,7 @@ enum HomeBackupService {
         let base = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
         let directory = base.appendingPathComponent("HomeKitten/Backups", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
         return directory
     }
     private static func allRooms(_ home: HMHome) -> [HMRoom] { Array(Dictionary(grouping: home.rooms + [home.roomForEntireHome()], by: \.uniqueIdentifier).values.compactMap(\.first)) }
@@ -284,9 +303,11 @@ enum HomeBackupService {
     }
 
     enum RestoreError: LocalizedError {
-        case accessoryUnavailable, automationCannotBeRecreated(String), noResult
+        case accessoryUnavailable, automationCannotBeRecreated(String), noResult, missingReference, incompleteScene
         var errorDescription: String? {
             switch self {
+            case .missingReference: "The exact saved UUID or a required reference is missing. No display-name substitution or recreation is allowed."
+            case .incompleteScene: "This scene cannot be safely replaced from this backup. Use scoped agent recovery; legacy, empty, hidden or HomeKit-owned actions cannot be reconstructed here."
             case .accessoryUnavailable: "The physical accessory is not currently available in this home."
             case .automationCannotBeRecreated(let kind): "HomeKit does not expose enough data to recreate this \(kind.lowercased()) automation. Existing copies can still be restored."
             case .noResult: "HomeKit completed without returning the restored object."
@@ -326,7 +347,7 @@ struct BackupsWorkspaceView: View {
         catch { message = error.localizedDescription }
         showingMessage = true
     }
-    private func reload() { do { backups = try HomeBackupService.load() } catch { message = error.localizedDescription; showingMessage = true } }
+    private func reload() { do { backups = try HomeBackupService.load().filter { $0.homeID == home.uniqueIdentifier } } catch { message = error.localizedDescription; showingMessage = true } }
 }
 
 private struct BackupDetailView: View {
@@ -337,6 +358,13 @@ private struct BackupDetailView: View {
 
     var body: some View {
         List {
+            Section("Backup coverage") {
+                Text(backup.configurationVersion == 3 ? "Includes complete public HomeKit configuration and automation rule trees. Cached characteristic values are labelled; hidden shortcut/audio actions and pairing keys are unavailable." : "Legacy backup: detailed rules, zones and service configuration were not saved.")
+                Text("Restore below changes only the listed settings of existing UUIDs. Automation restore changes name, enabled state and scene links; use agent recovery for rule restoration.").font(.footnote)
+                if let url = try? HomeBackupService.exportURL(backup) {
+                    ShareLink("Export Backup JSON", item: url)
+                }
+            }
             backupSection("Accessories", items: backup.accessories, name: \.name, differs: { HomeBackupService.differs($0, from: home) }, restore: { try await HomeBackupService.restore($0, to: home) })
             backupSection("Rooms", items: backup.rooms, name: \.name, differs: { HomeBackupService.differs($0, from: home) }, restore: { try await HomeBackupService.restore($0, to: home) })
             backupSection("Scenes", items: backup.scenes, name: \.name, differs: { HomeBackupService.differs($0, from: home) }, restore: { try await HomeBackupService.restore($0, to: home) })
@@ -358,14 +386,14 @@ private struct BackupDetailView: View {
                             .font(.caption).foregroundStyle(changed ? .orange : .green)
                     }
                     Spacer()
-                    Button("Restore") { Task { await perform { try await restore(item) } } }.disabled(!changed)
+                    Button("Restore") { Task { await perform { try await restore(item); if differs(item) { throw NSError(domain: "HomeKittenRestore", code: 1, userInfo: [NSLocalizedDescriptionKey: "Restore callback returned, but selected settings still differ. Inspect Home before retrying."]) } } } }.disabled(!changed)
                 }
             }
         }
     }
 
     private func perform(_ operation: () async throws -> Void) async {
-        do { try await operation(); message = "Restored successfully." } catch { message = error.localizedDescription }
+        do { try HomeBackupService.save(HomeBackupService.makeBackup(home: home)); try await operation(); message = "Selected settings restored. Automation rules and physical behavior were not verified." } catch { message = error.localizedDescription }
         showingMessage = true
     }
 }

@@ -149,3 +149,16 @@ original coverage table above describes the replace-all recovery path; new
 incremental recovery does not reconstruct hidden internals. Native automation
 reference mapping preserves clauses in place, but does not promise automatic
 recovery of every unsupported rule. Creation/deletion and pairing limits remain.
+
+## Controller comparison release
+
+Build 13 native backups embed the complete public configuration as readable JSON,
+including detailed rules, zones, service metadata, default room and owned actions;
+old native backups remain decodable. Native UI export is available in backup
+details. Native restore no longer guesses by display name or recreates partial
+timers, and blocks legacy/hidden scene replacement. Detailed automation rule
+restore remains the guarded agent path, not the native summary restore.
+Client 1.7.0 adds `service` recovery for `name` / `associatedServiceType` and numeric
+threshold event recovery. Presence/time/custom rule limits otherwise remain.
+Controller source archives are private evidence, not an automatic restore source.
+See [the format and coverage](CONTROLLER_BACKUPS.md).

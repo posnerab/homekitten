@@ -110,3 +110,99 @@ enum AutomationRules {
         }
     }
 }
+
+extension AutomationRules {
+    // Pair only direct siblings in an exact HomeKit factory predicate. Never borrow a
+    // value from a different AND/OR branch or infer an absent comparison.
+    static func characteristicPair(_ node: [String: Any]) -> (reference: [String: Any], comparison: [String: Any])? {
+        guard node["kind"] as? String == "compound", node["operator"] as? String == "and",
+              let children = node["children"] as? [[String: Any]], children.count == 2,
+              let identity = children.first(where: { ($0["left"] as? [String: Any])?["keyPath"] as? String == "characteristic" }),
+              let comparison = children.first(where: { ($0["left"] as? [String: Any])?["keyPath"] as? String == "characteristicValue" }),
+              identity["operator"] as? String == "equal",
+              [identity, comparison].allSatisfy({ $0["kind"] as? String == "comparison" && $0["modifier"] as? String == "direct" && ($0["optionsRawValue"] as? NSNumber)?.uintValue == 0 && ($0["right"] as? [String: Any])?["kind"] as? String == "constant" }),
+              let ref = (identity["right"] as? [String: Any])?["value"] as? [String: Any],
+              (ref["kind"] as? String == "characteristic" && ref["id"] as? String != nil) ||
+                (ref["kAccessoryUUID"] as? String != nil && ref["kServiceInstanceID"] as? NSNumber != nil && ref["kCharacteristicInstanceID"] as? NSNumber != nil) else { return nil }
+        return (ref, comparison)
+    }
+
+    static func conditionSummary(_ node: [String: Any]) -> String {
+        if let pair = characteristicPair(node) {
+            let ref = pair.reference, comparison = pair.comparison
+            let name = [ref["accessoryName"] as? String, ref["name"] as? String].compactMap { $0 }.joined(separator: " · ")
+            let operators = ["equal": "is", "notEqual": "is not", "lessThan": "is less than", "greaterThan": "is greater than", "lessThanOrEqual": "is at most", "greaterThanOrEqual": "is at least"]
+            let value = (comparison["right"] as? [String: Any])?["value"]
+            var display = value.map { String(describing: $0) } ?? "missing value"
+            if (ref["type"] as? String)?.hasPrefix("00000025-") == true, let number = value as? NSNumber,
+               number == 0 || number == 1 { display = number.boolValue ? "on" : "off" }
+            let label = name.isEmpty ? ref["id"] as? String ?? "Unavailable accessory [\(ref["kAccessoryUUID"] as? String ?? "unknown UUID")]" : name
+            return "\(label) \(operators[comparison["operator"] as? String ?? ""] ?? comparison["operator"] as? String ?? "compares") \(display)"
+        }
+        if node["kind"] as? String == "compound", let children = node["children"] as? [[String: Any]] {
+            let summaries = children.map { conditionSummary($0) }
+            switch node["operator"] as? String {
+            case "and": return summaries.map { "(\($0))" }.joined(separator: " AND ")
+            case "or": return summaries.map { "(\($0))" }.joined(separator: " OR ")
+            case "not": return "NOT (\(summaries.joined(separator: ", ")))"
+            default: break
+            }
+        }
+        if (node["left"] as? [String: Any])?["keyPath"] as? String == "characteristic" {
+            let ref = (node["right"] as? [String: Any])?["value"] as? [String: Any]
+            let name = ref?["accessoryName"] as? String ?? ref?["id"] as? String ?? "Unresolved accessory"
+            return "\(name): accessory reference without a value comparison"
+        }
+        // Native time/presence and unknown clauses remain inspectable, with their exact format.
+        return node["format"] as? String ?? "Unsupported condition (retained)"
+    }
+
+    static func conditionIssues(_ node: [String: Any], path: String = "predicate") -> [[String: Any]] {
+        if let pair = characteristicPair(node) {
+            if pair.reference["kind"] as? String == "characteristic" { return [] }
+            return [["code": "unresolvedAccessoryReference", "path": path, "message": "Saved accessory reference is unavailable; explicit UUID mapping is required", "reference": pair.reference, "format": node["format"] ?? ""]]
+        }
+        if let children = node["children"] as? [[String: Any]] {
+            return children.enumerated().flatMap { conditionIssues($0.element, path: "\(path).children[\($0.offset)]") }
+        }
+        if (node["left"] as? [String: Any])?["keyPath"] as? String == "characteristic" {
+            return [["code": "unpairedCharacteristicReference", "path": path, "message": conditionSummary(node), "format": node["format"] ?? ""]]
+        }
+        if (node["left"] as? [String: Any])?["keyPath"] as? String == "characteristicValue" {
+            return [["code": "unpairedCharacteristicValue", "path": path, "message": "Value comparison has no unambiguous accessory reference", "format": node["format"] ?? ""]]
+        }
+        if node["supported"] as? Bool == false {
+            return [["code": "unsupportedPredicate", "path": path, "message": "Native condition retained but not understood", "format": node["format"] ?? ""]]
+        }
+        return []
+    }
+}
+
+// A readable JSON value tree for complete native backups. Optional new fields keep
+// old backups decodable; unknown public-API data is retained without lossy coercion.
+indirect enum BackupJSON: Codable, Sendable {
+    case object([String: BackupJSON]), array([BackupJSON]), string(String), number(Decimal), bool(Bool), null
+    init(object: Any) throws {
+        self = try JSONDecoder().decode(Self.self, from: JSONSerialization.data(withJSONObject: object, options: [.fragmentsAllowed]))
+    }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.singleValueContainer()
+        if c.decodeNil() { self = .null }
+        else if let v = try? c.decode(Bool.self) { self = .bool(v) }
+        else if let v = try? c.decode(String.self) { self = .string(v) }
+        else if let v = try? c.decode([String: BackupJSON].self) { self = .object(v) }
+        else if let v = try? c.decode([BackupJSON].self) { self = .array(v) }
+        else { self = .number(try c.decode(Decimal.self)) }
+    }
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.singleValueContainer()
+        switch self {
+        case .object(let v): try c.encode(v)
+        case .array(let v): try c.encode(v)
+        case .string(let v): try c.encode(v)
+        case .number(let v): try c.encode(v)
+        case .bool(let v): try c.encode(v)
+        case .null: try c.encodeNil()
+        }
+    }
+}

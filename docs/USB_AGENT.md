@@ -114,7 +114,7 @@ backup and public-API automation-rule snapshot before deletion and verify absenc
 after the callback. Rule snapshots are evidence, not automatic event-rule recovery.
 A failed or interrupted deletion must be inspected before retrying. Existing MCP
 connections must reconnect to discover the new operation enum. Pairing and
-accessory/room/Home/user deletion remain unavailable.
+standalone accessory/Home/user deletion remain unavailable; guarded empty room/group/zone deletion is documented below.
 
 ### Event automation writes
 
@@ -375,3 +375,37 @@ xcrun --sdk macosx clang -fobjc-arc -fmodules -framework AppKit \
 
 The isolated harness checks close-to-hide, reopening, delegate forwarding and
 busy controls without accessing HomeKit or changing any Home objects.
+
+## Controller comparison extensions
+
+Build 13 / client 1.7.0 advertises `backupConfigurationVersion: 3`,
+`conditionDiagnosticsVersion: 1`, `structuralWritesVersion: 1` and
+`thresholdWritesVersion: 1`. Reconnect MCP clients after installation.
+
+| Operation | Fields beyond `operation`, `homeID` |
+| --- | --- |
+| `rename_service` | `objectID` (service UUID), `name` |
+| `set_service_type` | `objectID` (switch/outlet service UUID), `associatedServiceType` (fan/lightbulb/outlet type UUID, or `""` to clear) |
+| `delete_room` | `objectID` (empty ordinary room, no zone membership) |
+| `delete_group` | `objectID` (empty service group) |
+| `delete_zone` | `objectID` (empty zone) |
+
+Deletion accepts no collateral fields, rejects native automation references,
+creates the existing durable/app backups and verifies absence. Explicitly remove
+memberships first. It has no automatic recreation/inverse.
+
+A threshold start/end event has `kind: "threshold"`, `characteristicID` and
+`minValue` and/or `maxValue`. Bounds must be finite, numeric, ordered and match the
+characteristic's range, choices and step. The characteristic must be readable,
+numeric and support notifications. For example:
+
+```json
+{"kind":"threshold","characteristicID":"<numeric characteristic UUID>","maxValue":55}
+```
+
+Scoped recovery `kind: "service"` supports `fields: ["name"]` and/or
+`["associatedServiceType"]`; old backups lacking a selected field block recovery.
+Numeric threshold event recovery requires the updated app capability. Native UI
+backups now embed the full public configuration tree and can export JSON.
+See [Controller backup interoperability](CONTROLLER_BACKUPS.md) for the local
+legacy decoder, private source archive and unresolved API boundaries.

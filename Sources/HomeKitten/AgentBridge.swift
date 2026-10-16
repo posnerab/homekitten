@@ -56,6 +56,8 @@ struct AgentEvent: Codable, Sendable, Equatable {
     let presenceEvent: String?
     let presenceUser: String?
     let durationSeconds: Double?
+    var minValue: Double? = nil
+    var maxValue: Double? = nil
 }
 
 struct AgentCondition: Codable, Sendable {
@@ -76,6 +78,7 @@ struct AgentRequest: Codable, Identifiable, Sendable {
     let objectID: UUID?
     let roomID: UUID?
     let name: String?
+    var associatedServiceType: String? = nil
     let value: AgentValue?
     let actions: [AgentAction]?
     let sceneIDs: [UUID]?
@@ -400,6 +403,18 @@ final class AgentBridge {
         guard specs.enumerated().allSatisfy({ index, item in !specs.prefix(index).contains(item) }) else { throw failure("Duplicate events") }
         return try specs.map { spec in
             switch spec.kind {
+            case "threshold":
+                let c = try readableCharacteristic(spec.characteristicID, in: home, notifying: true)
+                guard spec.minValue != nil || spec.maxValue != nil else { throw failure("Threshold requires a lower and/or upper bound") }
+                let numeric = [HMCharacteristicMetadataFormatInt, HMCharacteristicMetadataFormatFloat, HMCharacteristicMetadataFormatUInt8, HMCharacteristicMetadataFormatUInt16, HMCharacteristicMetadataFormatUInt32, HMCharacteristicMetadataFormatUInt64]
+                guard let format = c.metadata?.format, numeric.contains(format) else { throw failure("Threshold requires a numeric characteristic") }
+                for value in [spec.minValue, spec.maxValue].compactMap({ $0 }) { try validate(.number(value), for: c) }
+                if let min = spec.minValue, let max = spec.maxValue, min > max { throw failure("Threshold minimum exceeds maximum") }
+                let range: HMNumberRange
+                if let min = spec.minValue, let max = spec.maxValue { range = HMNumberRange(minValue: NSNumber(value: min), maxValue: NSNumber(value: max)) }
+                else if let min = spec.minValue { range = HMNumberRange(minValue: NSNumber(value: min)) }
+                else { range = HMNumberRange(maxValue: NSNumber(value: spec.maxValue!)) }
+                return HMCharacteristicThresholdRangeEvent(characteristic: c, thresholdRange: range)
             case "characteristic":
                 let c = try readableCharacteristic(spec.characteristicID, in: home, notifying: true)
                 guard let value = spec.value else { throw failure("Characteristic event requires value") }
@@ -481,6 +496,9 @@ final class AgentBridge {
 
     private func describe(_ r: AgentRequest) throws -> String {
         let home = try resolveHome(r)
+        if ["rename_service", "set_service_type", "delete_room", "delete_group", "delete_zone"].contains(r.operation) {
+            return try describeStructure(r, home: home)
+        }
         if r.operation == "remove_bridge" {
             guard r.objectID != nil, r.roomID == nil, r.name == nil, r.value == nil, r.actions == nil,
                   r.sceneIDs == nil, r.serviceIDs == nil, r.addServiceIDs == nil, r.removeServiceIDs == nil,
@@ -492,6 +510,7 @@ final class AgentBridge {
             let bridge = try HomeBridgeRemoval.validate(r, home: home)
             return "Permanently remove bridge \(bridge.name) [\(bridge.uniqueIdentifier)] and \(bridge.bridgedAccessories.count) children. Pairing has no automatic inverse; unrelated objects are retained."
         }
+        guard r.associatedServiceType == nil else { throw failure("Service type requires set_service_type") }
         guard r.bridgedAccessoryIDs == nil, r.auditedOpaqueSceneIDs == nil else { throw failure("Bridge audit fields require remove_bridge") }
         let extensions = ["create_group", "update_group", "create_zone", "update_zone", "rename_room", "patch_scene", "remap_automation_references"]
         if extensions.contains(r.operation) { return try describeExtension(r, home: home) }
@@ -599,6 +618,9 @@ final class AgentBridge {
     }
 
     private func execute(_ r: AgentRequest, home: HMHome) async throws -> String {
+        if ["rename_service", "set_service_type", "delete_room", "delete_group", "delete_zone"].contains(r.operation) {
+            return try await executeStructure(r, home: home)
+        }
         if ["create_group", "update_group", "create_zone", "update_zone", "rename_room", "patch_scene", "remap_automation_references"].contains(r.operation) {
             return try await executeExtension(r, home: home)
         }
@@ -927,52 +949,72 @@ final class AgentBridge {
         return "Placement verified"
     }
 
-    private func publish(_ store: HomeStore) throws {
-        let homes: [[String: Any]] = store.homes.map { home in
-            let bridges = Dictionary(uniqueKeysWithValues: home.accessories.flatMap { bridge in
-                bridge.bridgedAccessories.map { ($0.uniqueIdentifier, bridge) }
-            })
-            let accessories: [[String: Any]] = home.accessories.map { accessory in
-                let services: [[String: Any]] = accessory.services.map { service in
-                    let characteristics: [[String: Any]] = service.characteristics.map { c in
-                        ["id": c.uniqueIdentifier.uuidString, "name": c.localizedDescription,
-                         "type": c.characteristicType, "properties": c.properties,
-                         "cachedValue": jsonValue(c.value), "metadataReadStatus": metadataReadStatus[c.uniqueIdentifier.uuidString] ?? "not_requested", "format": c.metadata?.format ?? "",
-                         "min": jsonValue(c.metadata?.minimumValue), "max": jsonValue(c.metadata?.maximumValue),
-                         "step": jsonValue(c.metadata?.stepValue), "validValues": c.metadata?.validValues ?? [],
-                         "unit": c.metadata?.units ?? ""]
-                    }
-                    return ["id": service.uniqueIdentifier.uuidString, "name": service.name, "type": service.serviceType, "characteristics": characteristics]
-                }
-                return ["id": accessory.uniqueIdentifier.uuidString, "name": accessory.name, "reachable": accessory.isReachable,
-                        "roomID": accessory.room?.uniqueIdentifier.uuidString ?? "", "services": services,
-                        "manufacturer": accessory.manufacturer ?? "", "model": accessory.model ?? "",
-                        "firmwareVersion": accessory.firmwareVersion ?? "",
-                        "categoryType": accessory.category.categoryType,
-                        "bridgeID": bridges[accessory.uniqueIdentifier]?.uniqueIdentifier.uuidString ?? "",
-                        "bridgeName": bridges[accessory.uniqueIdentifier]?.name ?? ""]
-            }
-            // Trigger-owned action sets are not necessarily listed in home.actionSets.
-            var actionSets = home.actionSets
-            var actionSetIDs = Set(actionSets.map(\.uniqueIdentifier))
-            for scene in home.triggers.flatMap(\.actionSets) where actionSetIDs.insert(scene.uniqueIdentifier).inserted {
-                actionSets.append(scene)
-            }
-            let scenes = actionSets.map { AutomationInventory.actionSet($0) }
-            let automations = home.triggers.map { AutomationInventory.trigger($0) }
-            let rooms: [[String: Any]] = home.rooms.map { ["id": $0.uniqueIdentifier.uuidString, "name": $0.name] }
-            let zones: [[String: Any]] = home.zones.map {
-                ["id": $0.uniqueIdentifier.uuidString, "name": $0.name,
-                 "roomIDs": $0.rooms.map { $0.uniqueIdentifier.uuidString }]
-            }
-            let groups: [[String: Any]] = home.serviceGroups.map { ["id": $0.uniqueIdentifier.uuidString, "name": $0.name, "serviceIDs": $0.services.map { $0.uniqueIdentifier.uuidString }] }
-            return ["id": home.uniqueIdentifier.uuidString, "name": home.name, "rooms": rooms, "groups": groups,
-                    "zones": zones, "accessories": accessories, "scenes": scenes, "automations": automations]
+    private func describeStructure(_ r: AgentRequest, home: HMHome) throws -> String {
+        guard let id = r.objectID else { throw failure("Exact objectID required") }
+        let fields = try JSONSerialization.jsonObject(with: r.canonicalData()) as! [String: Any]
+        let allowed: Set<String> = r.operation == "rename_service" ? ["id", "sessionID", "operation", "homeID", "objectID", "name"] : ["id", "sessionID", "operation", "homeID", "objectID"]
+        let permitted = r.operation == "set_service_type" ? Set(["id", "sessionID", "operation", "homeID", "objectID", "associatedServiceType"]) : allowed
+        guard Set(fields.keys).isSubset(of: permitted) else { throw failure("Unrelated structural change fields") }
+        switch r.operation {
+        case "rename_service":
+            let target = try service(id, home: home)
+            _ = try newName(r)
+            return "Rename service \(target.name) [\(id)]"
+        case "set_service_type":
+            let target = try service(id, home: home)
+            guard target.serviceType == HMServiceTypeOutlet || target.serviceType == HMServiceTypeSwitch,
+                  let type = r.associatedServiceType,
+                  ["", HMServiceTypeFan, HMServiceTypeLightbulb, HMServiceTypeOutlet].contains(type) else { throw failure("Associated type requires a switch/outlet and fan, lightbulb, outlet or empty string") }
+            return "Change associated service type [\(id)]"
+        case "delete_room":
+            guard let room = home.rooms.first(where: { $0.uniqueIdentifier == id }), id != home.roomForEntireHome().uniqueIdentifier,
+                  !home.accessories.contains(where: { $0.room?.uniqueIdentifier == id }), room.accessories.isEmpty,
+                  !home.zones.contains(where: { $0.rooms.contains(where: { $0.uniqueIdentifier == id }) }) else { throw failure("Delete room requires an empty ordinary room with no zone membership; move accessories/remove memberships first") }
+        case "delete_group":
+            guard let group = home.serviceGroups.first(where: { $0.uniqueIdentifier == id }), group.services.isEmpty else { throw failure("Delete group requires an existing empty group; remove memberships explicitly first") }
+        case "delete_zone":
+            guard let zone = home.zones.first(where: { $0.uniqueIdentifier == id }), zone.rooms.isEmpty else { throw failure("Delete zone requires an existing empty zone; remove memberships explicitly first") }
+        default: throw failure("Unsupported structural operation")
         }
+        // Retain native references; no cascade or automatic membership removal.
+        for trigger in home.triggers {
+            let data = try JSONSerialization.data(withJSONObject: AutomationInventory.trigger(trigger), options: [.sortedKeys])
+            guard !String(decoding: data, as: UTF8.self).localizedCaseInsensitiveContains(id.uuidString) else { throw failure("Automation references this object; remove the reference explicitly first") }
+        }
+        return "Permanently delete empty object [\(id)]; no automatic recreation"
+    }
+
+    private func executeStructure(_ r: AgentRequest, home: HMHome) async throws -> String {
+        _ = try describeStructure(r, home: home)
+        let id = r.objectID!
+        switch r.operation {
+        case "rename_service":
+            let target = try service(id, home: home), name = try newName(r)
+            if target.name != name { try await target.updateName(name) }
+            guard target.name == name else { throw failure("Service rename read-back failed") }
+            return "Service name verified"
+        case "set_service_type":
+            let target = try service(id, home: home), type = r.associatedServiceType!
+            try await target.updateAssociatedServiceType(type.isEmpty ? nil : type)
+            guard (target.associatedServiceType ?? "") == type else { throw failure("Associated service type read-back failed") }
+            return "Associated service type verified"
+        case "delete_room": try await home.removeRoom(home.rooms.first { $0.uniqueIdentifier == id }!)
+        case "delete_group": try await home.removeServiceGroup(home.serviceGroups.first { $0.uniqueIdentifier == id }!)
+        case "delete_zone": try await home.removeZone(home.zones.first { $0.uniqueIdentifier == id }!)
+        default: throw failure("Unsupported structural operation")
+        }
+        guard !home.rooms.contains(where: { $0.uniqueIdentifier == id }),
+              !home.serviceGroups.contains(where: { $0.uniqueIdentifier == id }),
+              !home.zones.contains(where: { $0.uniqueIdentifier == id }) else { throw failure("Deletion callback returned but object remains; inspect transaction before retrying") }
+        return "Empty object deletion verified"
+    }
+
+    private func publish(_ store: HomeStore) throws {
+        let homes = store.homes.map { AutomationInventory.configuration($0, metadataReadStatus: metadataReadStatus) }
         try write(["version": 2, "active": true, "writesAllowed": writesAllowed, "capturedAt": isoNow(), "sessionID": sessionID.uuidString,
                    "liveReadsSupported": true, "membershipWritesVersion": 1, "incrementalSceneWritesVersion": 1,
                    "nativeReferenceWritesVersion": 1, "booleanNormalizationVersion": 1, "migrationPlanVersion": 1,
-                   "backupConfigurationVersion": 2, "bridgeRemovalVersion": 1,
+                   "thresholdWritesVersion": 1, "structuralWritesVersion": 1, "backupConfigurationVersion": 3, "conditionDiagnosticsVersion": 1, "bridgeRemovalVersion": 1,
                    "automationRulesVersion": 1, "automationWritesVersion": 1, "deletionWritesVersion": 1, "conditionCompositionVersion": 1, "automationRulesSource": "HomeKit public API",
                    "valuesAreCached": true, "homes": homes], to: "inventory.json")
     }

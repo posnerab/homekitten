@@ -1460,53 +1460,12 @@ private func eventDescription(_ event: HMEvent) -> String {
     return String(describing: type(of: event))
 }
 
+@MainActor
 private func conditionDescription(_ predicate: NSPredicate?, home: HMHome) -> String {
     guard let predicate else { return "No conditions" }
-    let raw = predicate.predicateFormat
-        .replacingOccurrences(of: "HMSignificantEventSunrise", with: "sunrise")
-        .replacingOccurrences(of: "HMSignificantEventSunset", with: "sunset")
-        .replacingOccurrences(of: "characteristicValue", with: "value")
-        .replacingOccurrences(of: "HMPresenceTypeAnyUserAtHome", with: "anyone is home")
-        .replacingOccurrences(of: "HMPresenceTypeAnyUserNotAtHome", with: "nobody is home")
-        .replacingOccurrences(of: "HMPresenceTypeCurrentUserAtHome", with: "you are home")
-        .replacingOccurrences(of: "HMPresenceTypeCurrentUserNotAtHome", with: "you are away")
-        .replacingOccurrences(of: "HMPResenceTypeAnyUserAtHome", with: "anyone is home")
-        .replacingOccurrences(of: "HMPResenceTypeAnyUserNotAtHome", with: "nobody is home")
-        .replacingOccurrences(of: "HMPresenceEventTypeFirstEntry", with: "first person arrives")
-        .replacingOccurrences(of: "HMPresenceEventTypeLastExit", with: "last person leaves")
-        .replacingOccurrences(of: "HMPresenceEventUserTypeCurrentUser", with: "you")
-        .replacingOccurrences(of: "HMPresenceEventUserTypeHomeUsers", with: "home members")
-        .replacingOccurrences(of: "Presence-Event:", with: "Presence:")
-
-    for accessory in home.accessories {
-        for service in accessory.services {
-            for characteristic in service.characteristics {
-                if raw.contains(characteristic.uniqueIdentifier.uuidString) || raw.contains(characteristic.characteristicType) {
-                    let comparison = humanComparison(from: raw)
-                    return "Only if \(accessory.name) · \(characteristic.localizedDescription) \(comparison)"
-                }
-            }
-        }
-    }
-
-    return raw
-        .replacingOccurrences(of: "==", with: "is")
-        .replacingOccurrences(of: "!=", with: "is not")
-        .replacingOccurrences(of: ">=", with: "is at least")
-        .replacingOccurrences(of: "<=", with: "is at most")
-        .replacingOccurrences(of: " AND ", with: " and ")
-        .replacingOccurrences(of: " OR ", with: " or ")
+    return AutomationInventory.conditionSummary(predicate)
 }
 
-private func humanComparison(from text: String) -> String {
-    let value = text.split(separator: " ").last.map(String.init) ?? "the selected value"
-    if text.contains(">=") { return "is at least \(value)" }
-    if text.contains("<=") { return "is at most \(value)" }
-    if text.contains("!=") { return "is not \(value)" }
-    if text.contains(">") { return "is greater than \(value)" }
-    if text.contains("<") { return "is less than \(value)" }
-    return "is \(value)"
-}
 
 private func hasWritableCharacteristics(_ service: HMService) -> Bool {
     service.characteristics.contains { $0.properties.contains(HMCharacteristicPropertyWritable) }

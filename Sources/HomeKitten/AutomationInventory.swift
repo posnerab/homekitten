@@ -4,6 +4,51 @@ import CoreLocation
 
 @MainActor
 enum AutomationInventory {
+    static func configuration(_ home: HMHome, metadataReadStatus: [String: String] = [:]) -> [String: Any] {
+        let bridges = Dictionary(uniqueKeysWithValues: home.accessories.flatMap { bridge in
+            bridge.bridgedAccessories.map { ($0.uniqueIdentifier, bridge) }
+        })
+        let accessories: [[String: Any]] = home.accessories.map { accessory in
+            let services: [[String: Any]] = accessory.services.map { service in
+                let characteristics: [[String: Any]] = service.characteristics.map { c in
+                    ["id": c.uniqueIdentifier.uuidString, "name": c.localizedDescription,
+                     "type": c.characteristicType, "properties": c.properties,
+                     "cachedValue": AutomationRules.value(c.value), "metadataReadStatus": metadataReadStatus[c.uniqueIdentifier.uuidString] ?? "not_requested", "format": c.metadata?.format ?? "",
+                     "min": AutomationRules.value(c.metadata?.minimumValue), "max": AutomationRules.value(c.metadata?.maximumValue),
+                     "step": AutomationRules.value(c.metadata?.stepValue), "validValues": c.metadata?.validValues ?? [],
+                     "unit": c.metadata?.units ?? "", "maxLength": AutomationRules.value(c.metadata?.maxLength), "manufacturerDescription": c.metadata?.manufacturerDescription ?? ""]
+                }
+                return ["id": service.uniqueIdentifier.uuidString, "name": service.name, "type": service.serviceType, "associatedServiceType": service.associatedServiceType ?? "", "isPrimary": service.isPrimaryService, "isUserInteractive": service.isUserInteractive, "linkedServiceIDs": (service.linkedServices ?? []).map { $0.uniqueIdentifier.uuidString }, "characteristics": characteristics]
+            }
+            return ["id": accessory.uniqueIdentifier.uuidString, "name": accessory.name, "reachable": accessory.isReachable,
+                    "roomID": accessory.room?.uniqueIdentifier.uuidString ?? "", "services": services,
+                    "manufacturer": accessory.manufacturer ?? "", "model": accessory.model ?? "",
+                    "firmwareVersion": accessory.firmwareVersion ?? "",
+                    "categoryType": accessory.category.categoryType,
+                    "bridgeID": bridges[accessory.uniqueIdentifier]?.uniqueIdentifier.uuidString ?? "",
+                    "bridgeName": bridges[accessory.uniqueIdentifier]?.name ?? "", "isBlocked": accessory.isBlocked, "supportsIdentify": accessory.supportsIdentify]
+        }
+        // Trigger-owned action sets are not necessarily listed in home.actionSets.
+        var actionSets = home.actionSets
+        var actionSetIDs = Set(actionSets.map(\.uniqueIdentifier))
+        for scene in home.triggers.flatMap(\.actionSets) where actionSetIDs.insert(scene.uniqueIdentifier).inserted {
+            actionSets.append(scene)
+        }
+        let scenes = actionSets.map { AutomationInventory.actionSet($0) }
+        let automations = home.triggers.map { AutomationInventory.trigger($0) }
+        var allRooms = home.rooms
+        let defaultRoom = home.roomForEntireHome()
+        if !allRooms.contains(where: { $0.uniqueIdentifier == defaultRoom.uniqueIdentifier }) { allRooms.append(defaultRoom) }
+        let rooms: [[String: Any]] = allRooms.map { ["id": $0.uniqueIdentifier.uuidString, "name": $0.name, "isDefaultRoom": $0.uniqueIdentifier == defaultRoom.uniqueIdentifier] }
+        let zones: [[String: Any]] = home.zones.map {
+            ["id": $0.uniqueIdentifier.uuidString, "name": $0.name,
+             "roomIDs": $0.rooms.map { $0.uniqueIdentifier.uuidString }]
+        }
+        let groups: [[String: Any]] = home.serviceGroups.map { ["id": $0.uniqueIdentifier.uuidString, "name": $0.name, "serviceIDs": $0.services.map { $0.uniqueIdentifier.uuidString }] }
+        return ["id": home.uniqueIdentifier.uuidString, "name": home.name, "isPrimary": home.isPrimary, "valuesAreCached": true, "source": "HomeKit public API", "rooms": rooms, "entireHomeRoomID": home.roomForEntireHome().uniqueIdentifier.uuidString, "groups": groups,
+                "zones": zones, "accessories": accessories, "scenes": scenes, "automations": automations]
+    }
+
     static func trigger(_ trigger: HMTrigger) -> [String: Any] {
         var result: [String: Any] = ["id": trigger.uniqueIdentifier.uuidString, "name": trigger.name,
                                     "enabled": trigger.isEnabled, "kind": String(describing: type(of: trigger)),
@@ -13,7 +58,10 @@ enum AutomationInventory {
             result["rulesStatus"] = "publicAPI"
             result["events"] = event.events.map { self.event($0) }
             result["endEvents"] = event.endEvents.map { self.event($0) }
-            result["predicate"] = event.predicate.map { AutomationRules.predicate($0, object: object) } ?? (NSNull() as Any)
+            let tree = event.predicate.map { AutomationRules.predicate($0, object: object) }
+            result["predicate"] = tree ?? (NSNull() as Any)
+            result["conditionSummary"] = tree.map { AutomationRules.conditionSummary($0) } ?? "No conditions"
+            result["conditionIssues"] = tree.map { AutomationRules.conditionIssues($0) } ?? []
             result["recurrences"] = event.recurrences.map { $0.map { AutomationRules.components($0) } } ?? (NSNull() as Any)
             result["executeOnce"] = event.executeOnce
             result["activationStateRawValue"] = event.triggerActivationState.rawValue
@@ -80,6 +128,10 @@ enum AutomationInventory {
             result["supported"] = false
         }
         return result
+    }
+
+    static func conditionSummary(_ predicate: NSPredicate) -> String {
+        AutomationRules.conditionSummary(AutomationRules.predicate(predicate, object: object))
     }
 
     private static func reference(_ c: HMCharacteristic) -> [String: Any] {

@@ -140,6 +140,10 @@ def event(item):
         raise ValueError("Unsupported event")
     if kind == "HMCharacteristicEvent":
         return {"kind": "characteristic", "characteristicID": item["characteristicID"], "value": scalar(item["triggerValue"])}
+    if kind == "HMCharacteristicThresholdRangeEvent":
+        bounds = item["thresholdRange"]
+        return {"kind": "threshold", "characteristicID": item["characteristicID"],
+                **{key + "Value": scalar(bounds[key]) for key in ("min", "max") if bounds.get(key) is not None}}
     if kind == "HMCalendarEvent":
         parts = item["fireDateComponents"]
         if set(parts) - {"hour", "minute"} or "hour" not in parts or "minute" not in parts:
@@ -295,7 +299,7 @@ def recovery_scope(request, identifier, inventory=None):
                "update_automation": ("automation", [key for key in ("name", "enabled", "sceneIDs", "events", "endEvents", "conditions", "additionalConditions", "clearConditions", "recurrenceWeekdays", "executeOnce") if key in request])}
     choices.update({"update_group": ("group", [k for k in ("name", "serviceIDs") if k == "name" and k in request or k == "serviceIDs" and any(f in request for f in ("serviceIDs", "addServiceIDs", "removeServiceIDs"))]),
                     "update_zone": ("zone", [k for k in ("name", "roomIDs") if k == "name" and k in request or k == "roomIDs" and any(f in request for f in ("roomIDs", "addRoomIDs", "removeRoomIDs"))]),
-                    "rename_room": ("room", ["name"])})
+                    "rename_room": ("room", ["name"]), "rename_service": ("service", ["name"]), "set_service_type": ("service", ["associatedServiceType"])})
     if operation == "patch_scene":
         home = find((inventory or {}).get("homes", []), request["homeID"])
         scene = find(home["scenes"], request["objectID"])
@@ -315,7 +319,7 @@ def plan(store, client, identifier, home_id, kind, object_id, fields=None, chara
     allowed = {"accessory": {"name", "roomID"}, "scene": {"name", "actions"},
                "automation": {"name", "enabled", "sceneIDs", "events", "endEvents", "conditions", "additionalConditions", "clearConditions", "recurrenceWeekdays", "executeOnce"},
                "characteristic": {"value"}, "group": {"name", "serviceIDs"}, "zone": {"name", "roomIDs"},
-               "room": {"name"}, "scene_patch": {"actions"}}
+               "room": {"name"}, "scene_patch": {"actions"}, "service": {"name", "associatedServiceType"}}
     if kind not in allowed or (fields is not None and (not isinstance(fields, list) or not fields or not set(fields) <= allowed[kind])):
         raise ValueError("Invalid recovery kind or fields")
     if characteristic_ids is not None and (kind != "scene_patch" or not isinstance(characteristic_ids, list) or not characteristic_ids or len(set(characteristic_ids)) != len(characteristic_ids)):
@@ -337,6 +341,19 @@ def plan(store, client, identifier, home_id, kind, object_id, fields=None, chara
         basis = {"backupID": identifier, "homeID": home_id, "objectID": object_id, "fields": fields, "kind": kind, "value": current_value, "requests": requests}
         return {"backupID": identifier, "homeID": home_id, "kind": kind, "objectID": object_id, "fields": fields,
                 "requests": requests, "blocked": [], "planToken": hashlib.sha256(encoded(basis)).hexdigest(), "state": "preview", "limitations": record["limitations"]}
+    if kind == "service":
+        def services(h): return [s for a in h["accessories"] for s in a["services"]]
+        saved, present = find(services(saved_home), object_id), find(services(home), object_id)
+        requests, blocked = [], []
+        selected = fields if fields is not None else ["name", "associatedServiceType"]
+        for field in selected:
+            if field not in saved or field not in present:
+                blocked.append("Service field was not saved or current app is too old: " + field)
+            elif saved[field] != present[field]:
+                requests.append({"operation": "rename_service" if field == "name" else "set_service_type", "homeID": home_id, "objectID": object_id, field: saved[field]})
+        if blocked: requests = []
+        basis = {"backupID": identifier, "homeID": home_id, "kind": kind, "objectID": object_id, "fields": fields, "current": present, "requests": requests, "blocked": blocked}
+        return dict(basis, planToken=hashlib.sha256(encoded(basis)).hexdigest(), state="blocked" if blocked else "preview", limitations=record["limitations"])
     if kind in ("group", "zone", "room", "scene_patch"):
         collection = {"group": "groups", "zone": "zones", "room": "rooms", "scene_patch": "scenes"}[kind]
         saved, present = find(saved_home[collection], object_id), find(home[collection], object_id)

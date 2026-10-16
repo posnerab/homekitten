@@ -159,3 +159,14 @@ reference mapping that retains unrelated clauses, and a read-only hardware-match
 migration planner. Membership and scalar patches have scoped backup recovery.
 See [staged migration](docs/STAGED_MIGRATION.md) for operation fields, version
 flags, read-back, safety gates and hidden-data/physical-parity limits.
+
+## Controller backup comparison and condition diagnostics
+
+Build 13 / client 1.7.0 closes native backup omissions, exports full public
+configuration JSON, displays every compound-condition branch and flags incomplete
+accessory references. It adds service rename/presentation writes, guarded empty
+room/group/zone deletion, numeric threshold events and service recovery.
+`scripts/controller_backup.py` decodes legacy Controller `.backup` files locally
+and archives the exact source plus decoded YAML in the verified primary/mirror
+backup store. No HomeKit writes or name-based UUID substitution occur during
+import. See [coverage and remaining boundaries](docs/CONTROLLER_BACKUPS.md).
