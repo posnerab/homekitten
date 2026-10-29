@@ -126,7 +126,9 @@ reconnect to discover the extended `home_change_execute` schema.
 (0–32). Multiple start events are alternative triggers. Supported event objects:
 
 - `{"kind":"characteristic","characteristicID":"<UUID>","value":false}`:
-  exact state; characteristic must be readable and notify changes.
+  exact state; characteristic must be readable and notify changes. Programmable
+  switch input events may be notification-only (0 single, 1 double, 2 long press).
+  Conditions and threshold events still require readable characteristics.
 - `{"kind":"calendar","hour":18,"minute":0}`: local time of day.
 - `{"kind":"significant_time","significantEvent":"sunset","offsetMinutes":-18}`:
   sunrise/sunset, with signed offset from -720 to 720 minutes.

@@ -124,6 +124,10 @@ transactions. New automations default to disabled; updates disable during editin
 and re-enable only after success. Reconnect MCP clients after installing the
 updated signed app to discover the new schema.
 
+Build 15 accepts notification-only programmable button events for single,
+double and long press. Readable-state requirements remain in place for
+conditions and threshold events.
+
 Scene and automation detail screens support Delete. MCP exposes `delete_scene`
 and `delete_automation` through `home_change_execute` when the app advertises
 `deletionWritesVersion: 1`; reconnect MCP after updating to discover them. Both

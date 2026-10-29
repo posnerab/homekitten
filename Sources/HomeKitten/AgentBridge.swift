@@ -389,9 +389,9 @@ final class AgentBridge {
             if let valid = c.metadata?.validValues, !valid.isEmpty, !valid.contains(where: { $0.doubleValue == number }) { throw failure("Value outside valid choices") }
         }
     }
-    private func readableCharacteristic(_ id: UUID?, in home: HMHome, notifying: Bool = false) throws -> HMCharacteristic {
+    private func readableCharacteristic(_ id: UUID?, in home: HMHome, notifying: Bool = false, allowInputEvent: Bool = false) throws -> HMCharacteristic {
         guard let id, let c = home.accessories.flatMap(\.services).flatMap(\.characteristics).first(where: { $0.uniqueIdentifier == id }),
-              c.properties.contains(HMCharacteristicPropertyReadable),
+              c.properties.contains(HMCharacteristicPropertyReadable) || (allowInputEvent && notifying && c.characteristicType == HMCharacteristicTypeInputEvent),
               !notifying || c.properties.contains(HMCharacteristicPropertySupportsEventNotification) else {
             throw failure("Readable\(notifying ? " notifying" : "") characteristic UUID not found in this Home")
         }
@@ -416,7 +416,8 @@ final class AgentBridge {
                 else { range = HMNumberRange(maxValue: NSNumber(value: spec.maxValue!)) }
                 return HMCharacteristicThresholdRangeEvent(characteristic: c, thresholdRange: range)
             case "characteristic":
-                let c = try readableCharacteristic(spec.characteristicID, in: home, notifying: true)
+                // Stateless button events may notify without exposing a readable value.
+                let c = try readableCharacteristic(spec.characteristicID, in: home, notifying: true, allowInputEvent: true)
                 guard let value = spec.value else { throw failure("Characteristic event requires value") }
                 try validate(value, for: c)
                 return HMCharacteristicEvent<NSCopying>(characteristic: c, triggerValue: AgentScalar.normalized(value, format: c.metadata?.format).value)
