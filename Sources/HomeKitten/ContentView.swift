@@ -41,6 +41,9 @@ struct ContentView: View {
                     .toolbar { sectionToolbar }
             }
         }
+        .safeAreaInset(edge: .bottom) {
+            AppVersionFooter()
+        }
         .onChange(of: store.homes.map(\.uniqueIdentifier), initial: true) { _, _ in
             selectDefaultHomeIfNeeded()
         }
@@ -630,3 +633,20 @@ struct ContentView: View {
     }
 }
 #endif
+
+private struct AppVersionFooter: View {
+    private let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—"
+    private let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "—"
+
+    var body: some View {
+        Text("Version \(version) · Build \(build)")
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+            .multilineTextAlignment(.center)
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal)
+            .padding(.vertical, 8)
+            .background(.bar)
+            .accessibilityIdentifier("appVersion")
+    }
+}
