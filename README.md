@@ -105,6 +105,17 @@ suspension. TestFlight/App Store distribution remains a separate release.
 
 ### Fresh state queries through MCP
 
+The Mac inventory also includes `shortcutSceneReferences` for scene-based Siri
+shortcuts. When supported, these contain HomeKit's own serialized scene reference
+and native Home identifier, wrapped as a Shortcuts `homeaccessory` action. Pass
+the action unchanged to Shortcutery; public HomeKit UUIDs are not interchangeable
+with these native references. Binary data retains Shortcutery's tagged encoding.
+This optional private-framework read does not execute scenes, change the library,
+or grant Shortcutery HomeKit access. Unsupported OS versions omit references;
+the iPhone inventory explicitly reports this Mac-only capability as unsupported.
+Keep exported references and workflows private. Local shortcut read-back does
+not establish iCloud sync or Siri execution on another device.
+
 Use `home_read_characteristics` to read selected light/switch or sensor
 characteristics from HomeKit on demand, with per-value timestamps and explicit
 errors/timeouts. It also works in read-only connections. `home_inventory` keeps

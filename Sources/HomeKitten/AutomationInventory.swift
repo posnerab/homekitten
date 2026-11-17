@@ -1,4 +1,5 @@
 import Foundation
+import ObjectiveC
 import CoreLocation
 @preconcurrency import HomeKit
 
@@ -46,7 +47,44 @@ enum AutomationInventory {
         }
         let groups: [[String: Any]] = home.serviceGroups.map { ["id": $0.uniqueIdentifier.uuidString, "name": $0.name, "serviceIDs": $0.services.map { $0.uniqueIdentifier.uuidString }] }
         return ["id": home.uniqueIdentifier.uuidString, "name": home.name, "isPrimary": home.isPrimary, "valuesAreCached": true, "source": "HomeKit public API", "rooms": rooms, "entireHomeRoomID": home.roomForEntireHome().uniqueIdentifier.uuidString, "groups": groups,
-                "zones": zones, "accessories": accessories, "scenes": scenes, "automations": automations]
+                "zones": zones, "accessories": accessories, "scenes": scenes, "automations": automations,
+                "shortcutSceneReferences": shortcutSceneReferences(home)]
+    }
+
+    // Shortcuts uses HomeKit's native scene references, not the public API UUIDs.
+    // Export the framework-produced reference without reconstructing opaque data
+    // or granting Shortcutery HomeKit access. This does not execute a scene.
+    private static func shortcutSceneReferences(_ home: HMHome) -> [String: Any] {
+        #if targetEnvironment(macCatalyst)
+        let uuidSelector = NSSelectorFromString("uuid")
+        let serializationSelector = NSSelectorFromString("encodeAsProtoBuf")
+        let dataSelector = NSSelectorFromString("data")
+        guard home.responds(to: uuidSelector),
+              let nativeHome = home.perform(uuidSelector)?.takeUnretainedValue() as? NSUUID else {
+            return ["supported": false, "reason": "Native Home reference unavailable"]
+        }
+        var references: [[String: Any]] = []
+        for scene in home.actionSets where scene.actionSetType != HMActionSetTypeTriggerOwned {
+            guard scene.responds(to: serializationSelector),
+                  let encoded = scene.perform(serializationSelector)?.takeUnretainedValue() as? NSObject,
+                  encoded.responds(to: dataSelector),
+                  let data = encoded.perform(dataSelector)?.takeUnretainedValue() as? Data,
+                  !data.isEmpty else { continue }
+            let reference: [String: Any] = [
+                "HMActionSetSerializedData": ["$shortcutery": "data", "value": data.base64EncodedString()],
+                "HMActionSetSerializedDictionaryVersion": "1.0",
+                "HMActionSetSerializedDictionaryProtocol": "ProtoBuf"
+            ]
+            references.append(["sceneID": scene.uniqueIdentifier.uuidString,
+                "action": ["WFWorkflowActionIdentifier": "is.workflow.actions.homeaccessory",
+                    "WFWorkflowActionParameters": ["WFHomeTriggerActionSets": [
+                        "WFHFTriggerActionSetsBuilderParameterStateHome": nativeHome.uuidString,
+                        "WFHFTriggerActionSetsBuilderParameterStateActionSets": [reference]]]]])
+        }
+        return ["supported": !references.isEmpty, "source": "Private HomeKit native serialization", "references": references]
+        #else
+        return ["supported": false, "reason": "Available through the Mac bridge only"]
+        #endif
     }
 
     static func trigger(_ trigger: HMTrigger) -> [String: Any] {
