@@ -133,7 +133,8 @@ reconnect to discover the extended `home_change_execute` schema.
 - `{"kind":"significant_time","significantEvent":"sunset","offsetMinutes":-18}`:
   sunrise/sunset, with signed offset from -720 to 720 minutes.
 - `{"kind":"presence","presenceEvent":"first_entry","presenceUser":"home_users"}`:
-  first_entry/last_exit and home_users/current_user.
+  first_entry/last_exit and home_users/current_user. With automationWritesVersion 2,
+  every_entry fires for each arrival, including when another person is already home.
 - `{"kind":"duration","durationSeconds":60}`: end events only; at most 86400 seconds.
 
 `conditions` replaces the entire predicate using a declarative tree. A leaf has

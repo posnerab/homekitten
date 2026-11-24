@@ -114,9 +114,9 @@ confirmation, even if a device write was accepted.
 | `characteristic` | `value` | Requires a saved **fresh** pre-change read and a successful fresh current read. Cached inventory values are never used as rollback values. Write-only or failed reads have no automatic recovery. |
 
 Representable rules include scalar characteristic events; calendar hour/minute;
-sunrise/sunset with whole-minute offsets; supported first-entry/last-exit presence;
+sunrise/sunset with whole-minute offsets; supported first-entry/every-entry/last-exit presence;
 end durations; weekday recurrence; and characteristic comparison predicates with
-AND/OR/NOT. Threshold ranges, custom/every-entry presence, native time/presence
+AND/OR/NOT. Threshold ranges, custom-user presence, native time/presence
 predicate expressions, unsupported date components and timer schedule recreation
 are blocked. Unsupported details remain in the snapshot for manual inspection.
 `additionalConditions` recovery restores the original complete predicate only

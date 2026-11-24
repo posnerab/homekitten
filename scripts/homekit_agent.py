@@ -84,7 +84,7 @@ def validate_automation_rules(request):
                 if event.get("significantEvent") not in ("sunrise", "sunset") or type(event.get("offsetMinutes", 0)) is not int or not -720 <= event.get("offsetMinutes", 0) <= 720:
                     raise ValueError("Invalid significant time event")
             elif kind == "presence":
-                if event.get("presenceEvent") not in ("first_entry", "last_exit") or event.get("presenceUser", "home_users") not in ("home_users", "current_user"):
+                if event.get("presenceEvent") not in ("first_entry", "last_exit", "every_entry") or event.get("presenceUser", "home_users") not in ("home_users", "current_user"):
                     raise ValueError("Invalid presence event")
             elif field != "endEvents" or type(event.get("durationSeconds")) not in (int, float) or not 0 < event["durationSeconds"] <= 86400:
                 raise ValueError("Duration must be an end event between 0 and 86400 seconds")
@@ -267,6 +267,8 @@ class Client:
             return isinstance(node, dict) and (node.get("kind") == "presence" or any(needs_composition(child) for child in node.get("children", [])))
         if ("additionalConditions" in request or needs_composition(request.get("conditions"))) and inventory.get("conditionCompositionVersion", 0) < 1:
             raise RuntimeError("This app build does not support condition composition; install the updated HomeKitten app.")
+        if any(e.get("presenceEvent") == "every_entry" for key in ("events", "endEvents") for e in request.get(key, [])) and inventory.get("automationWritesVersion", 0) < 2:
+            raise RuntimeError("Install the signed app with every-entry event support")
         if any(e.get("kind") == "threshold" for key in ("events", "endEvents") for e in request.get(key, [])) and inventory.get("thresholdWritesVersion", 0) < 1:
             raise RuntimeError("Install the signed app with thresholdWritesVersion")
         capability = EXTENSION_CAPABILITIES.get(request["operation"])
@@ -405,7 +407,7 @@ def tool_definitions():
         {"type": "object", "additionalProperties": False, "required": ["kind", "significantEvent"], "properties": {
             "kind": {"const": "significant_time"}, "significantEvent": {"enum": ["sunrise", "sunset"]}, "offsetMinutes": {"type": "integer", "minimum": -720, "maximum": 720}}},
         {"type": "object", "additionalProperties": False, "required": ["kind", "presenceEvent"], "properties": {
-            "kind": {"const": "presence"}, "presenceEvent": {"enum": ["first_entry", "last_exit"]}, "presenceUser": {"enum": ["home_users", "current_user"]}}},
+            "kind": {"const": "presence"}, "presenceEvent": {"enum": ["first_entry", "last_exit", "every_entry"]}, "presenceUser": {"enum": ["home_users", "current_user"]}}},
         {"type": "object", "additionalProperties": False, "required": ["kind", "durationSeconds"], "properties": {
             "kind": {"const": "duration"}, "durationSeconds": {"type": "number", "exclusiveMinimum": 0, "maximum": 86400}}}
     ]}

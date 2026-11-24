@@ -428,8 +428,9 @@ final class AgentBridge {
                 guard let name = spec.significantEvent, ["sunrise", "sunset"].contains(name), (-720...720).contains(spec.offsetMinutes ?? 0) else { throw failure("Use sunrise/sunset and offsetMinutes -720–720") }
                 return HMSignificantTimeEvent(significantEvent: name == "sunrise" ? .sunrise : .sunset, offset: DateComponents(minute: spec.offsetMinutes ?? 0))
             case "presence":
-                guard let name = spec.presenceEvent, ["first_entry", "last_exit"].contains(name), ["home_users", "current_user"].contains(spec.presenceUser ?? "home_users") else { throw failure("Unsupported presence event/user scope") }
-                return HMPresenceEvent(presenceEventType: name == "first_entry" ? .firstEntry : .lastExit, presenceUserType: spec.presenceUser == "current_user" ? .currentUser : .homeUsers)
+                let types: [String: HMPresenceEventType] = ["first_entry": .firstEntry, "last_exit": .lastExit, "every_entry": .everyEntry]
+                guard let name = spec.presenceEvent, let type = types[name], ["home_users", "current_user"].contains(spec.presenceUser ?? "home_users") else { throw failure("Unsupported presence event/user scope") }
+                return HMPresenceEvent(presenceEventType: type, presenceUserType: spec.presenceUser == "current_user" ? .currentUser : .homeUsers)
             case "duration":
                 guard end, let seconds = spec.durationSeconds, seconds.isFinite, seconds > 0, seconds <= 86400 else { throw failure("Duration is an end event with 0 < durationSeconds <= 86400") }
                 return HMDurationEvent(duration: seconds)
@@ -1035,7 +1036,7 @@ final class AgentBridge {
                    "liveReadsSupported": true, "membershipWritesVersion": 1, "incrementalSceneWritesVersion": 1,
                    "nativeReferenceWritesVersion": 1, "booleanNormalizationVersion": 1, "migrationPlanVersion": 1,
                    "conditionNormalizationVersion": 1, "thresholdWritesVersion": 1, "structuralWritesVersion": 1, "backupConfigurationVersion": 3, "conditionDiagnosticsVersion": 1, "bridgeRemovalVersion": 1,
-                   "automationRulesVersion": 1, "automationWritesVersion": 1, "deletionWritesVersion": 1, "conditionCompositionVersion": 1, "automationRulesSource": "HomeKit public API",
+                   "automationRulesVersion": 1, "automationWritesVersion": 2, "deletionWritesVersion": 1, "conditionCompositionVersion": 1, "automationRulesSource": "HomeKit public API",
                    "valuesAreCached": true, "homes": homes], to: "inventory.json")
     }
     private func jsonValue(_ value: Any?) -> Any {

@@ -159,7 +159,7 @@ def event(item):
         return {"kind": "duration", "durationSeconds": item["durationSeconds"]}
     if kind == "HMPresenceEvent":
         scope = {"homeUsers": "home_users", "currentUser": "current_user"}.get(item["presenceUserType"])
-        trigger = {"firstEntryOrAtHome": "first_entry", "lastExitOrNotAtHome": "last_exit"}.get(item["presenceEventType"])
+        trigger = {"firstEntryOrAtHome": "first_entry", "lastExitOrNotAtHome": "last_exit", "everyEntry": "every_entry"}.get(item["presenceEventType"])
         if scope and trigger:
             return {"kind": "presence", "presenceEvent": trigger, "presenceUser": scope}
     raise ValueError("Event type cannot be restored exactly: " + kind)

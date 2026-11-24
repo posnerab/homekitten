@@ -262,7 +262,8 @@ class AgentTests(unittest.TestCase):
     def test_event_time_presence_end_duration_and_clearing_are_supported(self):
         request = {"operation": "update_automation", "homeID": str(uuid.uuid4()), "events": [
             {"kind": "calendar", "hour": 18, "minute": 0}, {"kind": "significant_time", "significantEvent": "sunset", "offsetMinutes": -18},
-            {"kind": "presence", "presenceEvent": "first_entry", "presenceUser": "home_users"}],
+            {"kind": "presence", "presenceEvent": "first_entry", "presenceUser": "home_users"},
+            {"kind": "presence", "presenceEvent": "every_entry", "presenceUser": "home_users"}],
             "endEvents": [{"kind": "duration", "durationSeconds": 60}], "clearConditions": True, "recurrenceWeekdays": [], "executeOnce": False}
         agent.validate_automation_rules(request)
         schema = agent.tool_definitions()[1]["inputSchema"]
