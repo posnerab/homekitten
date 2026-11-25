@@ -191,3 +191,5 @@ without reconstructing or dropping time, presence, OR or characteristic clauses.
 The exact-UUID `normalize_automation_conditions` operation and
 `conditionGroupingStatus` distinguish HomeKit rule validity from Controller backup
 round-trip compatibility. New AND writes/appends avoid accumulating these wrappers.
+
+On the Mac, AltRainbow can stream an expiring color sample to the Office Orb during a connected write-enabled session. The local adapter resolves the fixed Office Orb and both protected-period switches, checks power and color through HomeKit, and records the original color before writing. Each frame receives its own result. Disconnecting ends the session. The adapter cannot turn the lamp on.

@@ -22,6 +22,7 @@
 		B0000000000000000000001A /* AutomationRules.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0000000000000000000000A /* AutomationRules.swift */; };
 		B0000000000000000000001B /* AutomationInventory.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0000000000000000000000B /* AutomationInventory.swift */; };
 		C00000000000000000000011 /* AgentScalar.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000001 /* AgentScalar.swift */; };
+		E10000000000000000000011 /* OrbStream.swift in Sources */ = {isa = PBXBuildFile; fileRef = E10000000000000000000001 /* OrbStream.swift */; };
 		C00000000000000000000012 /* AgentMembership.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000002 /* AgentMembership.swift */; };
 		C00000000000000000000013 /* NativePredicateReference.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000003 /* NativePredicateReference.swift */; };
 		D00000000000000000000011 /* BridgeRemovalAudit.swift in Sources */ = {isa = PBXBuildFile; fileRef = D00000000000000000000001 /* BridgeRemovalAudit.swift */; };
@@ -42,6 +43,7 @@
 		B0000000000000000000000A /* AutomationRules.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutomationRules.swift; sourceTree = "<group>"; };
 		B0000000000000000000000B /* AutomationInventory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutomationInventory.swift; sourceTree = "<group>"; };
 		C00000000000000000000001 /* AgentScalar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentScalar.swift; sourceTree = "<group>"; };
+		E10000000000000000000001 /* OrbStream.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrbStream.swift; sourceTree = "<group>"; };
 		C00000000000000000000002 /* AgentMembership.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentMembership.swift; sourceTree = "<group>"; };
 		C00000000000000000000003 /* NativePredicateReference.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativePredicateReference.swift; sourceTree = "<group>"; };
 		D00000000000000000000001 /* BridgeRemovalAudit.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BridgeRemovalAudit.swift; sourceTree = "<group>"; };
@@ -83,6 +85,7 @@
 				D00000000000000000000002 /* HomeBridgeRemoval.swift */,
 				D00000000000000000000001 /* BridgeRemovalAudit.swift */,
 				C00000000000000000000001 /* AgentScalar.swift */,
+				E10000000000000000000001 /* OrbStream.swift */,
 				C00000000000000000000003 /* NativePredicateReference.swift */,
 				C00000000000000000000002 /* AgentMembership.swift */,
 				B0000000000000000000000B /* AutomationInventory.swift */,
@@ -203,6 +206,7 @@
 				D00000000000000000000012 /* HomeBridgeRemoval.swift in Sources */,
 				D00000000000000000000011 /* BridgeRemovalAudit.swift in Sources */,
 				C00000000000000000000011 /* AgentScalar.swift in Sources */,
+				E10000000000000000000011 /* OrbStream.swift in Sources */,
 				C00000000000000000000013 /* NativePredicateReference.swift in Sources */,
 				C00000000000000000000012 /* AgentMembership.swift in Sources */,
 				B0000000000000000000001B /* AutomationInventory.swift in Sources */,

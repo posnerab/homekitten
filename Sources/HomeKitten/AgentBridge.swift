@@ -145,7 +145,12 @@ final class AgentBridge {
     private var metadataReads = Set<UUID>()
     private var metadataReadStatus = [String: String]()
     private var timer: Timer?
+    #if targetEnvironment(macCatalyst)
+    private let orbStream = OrbStream()
+    var hasActiveOperation: Bool { busy || reading || orbStream.busy }
+    #else
     var hasActiveOperation: Bool { busy || reading }
+    #endif
     private var reading = false
     private var store: HomeStore?
     private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
@@ -186,6 +191,9 @@ final class AgentBridge {
             wantsConnection = false
             UserDefaults.standard.set(false, forKey: "agentBridge.enabled")
         }
+        #if targetEnvironment(macCatalyst)
+        orbStream.disconnect()
+        #endif
         timer?.invalidate(); timer = nil
         running = false
         writesAllowed = false
@@ -230,6 +238,9 @@ final class AgentBridge {
             refreshAccessoryMetadata(store)
             try publish(store)
             processReads()
+            #if targetEnvironment(macCatalyst)
+            if writesAllowed && !busy { orbStream.poll(directory: directory, session: sessionID, homes: store.homes) }
+            #endif
             guard pending == nil, !busy else { return }
             let files = try FileManager.default.contentsOfDirectory(at: directory.appendingPathComponent("incoming"), includingPropertiesForKeys: nil)
                 .filter { $0.pathExtension == "json" && !FileManager.default.fileExists(atPath: directory.appendingPathComponent("responses/\($0.lastPathComponent)").path) }
