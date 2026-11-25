@@ -192,7 +192,7 @@ final class AgentBridge {
             UserDefaults.standard.set(false, forKey: "agentBridge.enabled")
         }
         #if targetEnvironment(macCatalyst)
-        orbStream.disconnect()
+        orbStream.revoke()
         #endif
         timer?.invalidate(); timer = nil
         running = false
@@ -239,7 +239,7 @@ final class AgentBridge {
             try publish(store)
             processReads()
             #if targetEnvironment(macCatalyst)
-            if writesAllowed && !busy { orbStream.poll(directory: directory, session: sessionID, homes: store.homes) }
+            if writesAllowed && !busy { orbStream.poll(session: sessionID, homes: store.homes) }
             #endif
             guard pending == nil, !busy else { return }
             let files = try FileManager.default.contentsOfDirectory(at: directory.appendingPathComponent("incoming"), includingPropertiesForKeys: nil)

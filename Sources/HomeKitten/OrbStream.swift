@@ -41,7 +41,26 @@ final class OrbStream {
         return n.intValue
     }
 
-    func poll(directory: URL, session: UUID, homes: [HMHome]) {
+    private let directory = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
+        .appendingPathComponent("Library/Application Support/HomeKitten/OfficeOrb", isDirectory: true)
+    private var publishedSession: UUID?
+
+    func revoke() {
+        disconnect()
+        publishedSession = nil
+        try? FileManager.default.removeItem(at: directory.appendingPathComponent("session.json"))
+    }
+
+    func poll(session: UUID, homes: [HMHome]) {
+        if publishedSession != session {
+            do {
+                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
+                                                       attributes: [.posixPermissions: 0o700])
+                let record = try JSONEncoder().encode(["sessionID": session.uuidString])
+                try record.write(to: directory.appendingPathComponent("session.json"), options: .atomic)
+                publishedSession = session
+            } catch { return }
+        }
         let file = directory.appendingPathComponent("orb-frame.json")
         guard !busy, FileManager.default.fileExists(atPath: file.path),
               let data = try? Data(contentsOf: file), let frame = try? JSONDecoder().decode(Frame.self, from: data),
